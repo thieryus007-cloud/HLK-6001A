@@ -1,0 +1,10 @@
+
+ld6001A
+	https://github.com/Devristo/esphome-hlk-ld6001
+
+HiLink 220V a 10W 5V HLK-10M05B	
+
+
+ accelerometers, and a magnetometer, 
+
+3.7v	LP803450	1500mAh

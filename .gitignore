@@ -1,0 +1,8 @@
+# Python bytecode cache -- regenerated automatically, no source value.
+__pycache__/
+
+# Reference material not specific to this project's own work (TI mmWave
+# Demo Visualizer example, used for the HLK-LD6001B UI port, never read
+# or used within this 6001A project) -- same "only what's actually used
+# here" scope as HLK-LD6001B's own .gitignore.
+TI_example.pdf
