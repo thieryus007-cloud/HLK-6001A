@@ -10,10 +10,10 @@ production 6001B actuelle) — l'ESP32S3N16R8 reste réservé comme outil de
 capture pass-through si du reverse-engineering est nécessaire sur ce
 module, exactement comme il l'a été pour le 6001B.
 
-## Constat : quatre vagues de travail sur 6001B, aucune répercutée ici
+## Constat : cinq vagues de travail sur 6001B, aucune répercutée ici
 
 Le composant `hlk_ld6001a` actuel est figé à l'état de la **Phase 0**
-(2026-09-09, voir PLAN.md). Depuis, quatre vagues de travail ont eu lieu
+(2026-09-09, voir PLAN.md). Depuis, cinq vagues de travail ont eu lieu
 sur `HLK-LD6001B/ESP32S3_Plus/` sans équivalent ici :
 
 1. **2026-09-16** — portage de l'UI vers un style "TI" (onglets
@@ -26,13 +26,24 @@ sur `HLK-LD6001B/ESP32S3_Plus/` sans équivalent ici :
 3. **2026-09-21/22 (session suivante)** — rotations d'affichage
    persistées, refonte de la page Configure, bandeau supérieur en grille
    3 colonnes (voir `PLAN.md` Phase 12 du 6001B).
-4. **2026-09-22 (cette session)** — industrialisation complète de l'UI :
-   support tactile (Pointer Events, pincer-zoomer), boutons zoom/ajuster/
-   recentrer sur toutes les vues, infobulles sourcées du manuel
-   constructeur, conformité par champ, indicateurs de santé (uptime,
-   mémoire, WiFi, débit trames), pause/rémanence/export/inspection d'un
-   point — voir `HLK-LD6001B/ESP32S3_Plus/PLAN.md` Phase 13 et
+4. **2026-09-22** — industrialisation complète de l'UI : support tactile
+   (Pointer Events, pincer-zoomer), boutons zoom/ajuster/recentrer sur
+   toutes les vues, infobulles sourcées du manuel constructeur,
+   conformité par champ, indicateurs de santé (uptime, mémoire, WiFi,
+   débit trames), pause/rémanence/export/inspection d'un point — voir
+   `HLK-LD6001B/ESP32S3_Plus/PLAN.md` Phase 13 et
    `PLAN-UI-INDUSTRIALISATION.md` pour le détail complet, non répété ici.
+5. **2026-09-22 (cette session, suite)** — réorganisation de la page
+   Configure en colonnes reporting (gauche) / configuration (droite) pure
+   (permutation Advanced Commands ↔ Scene Selection), ligne 3 colonnes
+   Scan/Monitoring/Heartbeat, remplacement des boutons Démarrer/Arrêter
+   (constatés sans effet durable — `check_watchdog_()` relance toujours le
+   radar sous 90s) par un bouton unique "Redémarrer le radar"
+   (`POST /radar_restart`, cycle complet `AT+RESET`+réglages+`AT+DEBUG=2`+
+   `AT+START`, vérifié en bout en bout sur le matériel réel), compaction
+   supplémentaire pour tenir sans ascenseur, journal Advanced Commands
+   porté à 27 lignes visibles — voir `HLK-LD6001B/ESP32S3_Plus/PLAN.md`
+   Phase 14 pour le détail complet.
 
 ## Ce qui se porte directement, sans travail supplémentaire
 
