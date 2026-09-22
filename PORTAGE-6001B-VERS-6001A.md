@@ -56,10 +56,21 @@ intégrées — plusieurs points sont donc **déjà en avance** sur ce que le
   change (trivial, déjà connu — voir plus bas).
 - **Règle "PowerShell uniquement pour esphome/esptool"** — s'applique
   déjà universellement (DEPLOYMENT.md le documente déjà).
-- **`makeHlk2DView()`** (factory zoom/pan générique molette+glisser) et le
-  **correctif CSS iPad** (`width:100%; height:100%; display:block;` sur
-  les `<canvas>`) — code JS/CSS pur, indépendant du protocole radar,
-  copiable tel quel une fois la page portée (voir section suivante).
+- **`makeHlk2DView()`** (factory zoom/pan/**rotation 90°** générique, avec
+  `fillTextUpright()` pour garder les graduations lisibles quand l'image
+  est tournée, et `unrotatePx()`/`unrotateVec()` pour que la souris reste
+  cohérente) et les **deux correctifs d'affichage iPad** — `width:100%;
+  height:100%; display:block;` sur les `<canvas>`, et le bandeau
+  supérieur en **grille 3 colonnes** (`auto minmax(0,1fr) auto`) plutôt
+  qu'un centrage `position:absolute` qui chevauchait ses voisins. Code
+  JS/CSS pur, indépendant du protocole radar, copiable tel quel une fois
+  la page portée (voir section suivante).
+- **Rotation d'affichage persistée** (deux champs `RoomConfig`
+  indépendants, un par vue, enregistrés à chaque clic sans étape de
+  validation) — le mécanisme complet (C++ + HTTP + JS) se transpose
+  directement, `RoomConfig` existant déjà à l'identique côté 6001A.
+  Directement pertinent ici : ces radars seront posés au plafond, donc la
+  même question d'orientation se posera dès la première installation.
 
 ## Ce qui doit être refait ou adapté, pas simplement copié
 
@@ -99,11 +110,21 @@ terrain, donc à vérifier, jamais supposé) :
 
 Le composant 6001A est resté sur l'ancien `VIEWER_HTML` à 3 onglets
 (Pièce / Radar / Console AT) du Phase 0 — il n'a reçu ni le remaniement
-du 2026-09-16 (style TI, Configure/Plots) ni la page HLK du 2026-09-21.
-C'est un travail de portage HTML/CSS/JS substantiel à part entière,
-volontairement **non fait ici** (ce document est une analyse d'écart +
-plan, pas une implémentation UI complète) — voir "Plan d'action" plus
-bas pour où il se situe dans l'ordre des priorités.
+du 2026-09-16 (style TI, Configure/Plots), ni la page HLK du 2026-09-21,
+ni la refonte du 2026-09-22 (voir `HLK-LD6001B/ESP32S3_Plus/PLAN.md`
+Phase 12) : sélecteur HLK/Plots/Configure avec HLK par défaut, état radar
+dans le bandeau supérieur plutôt qu'en onglet, page Configure en deux
+colonnes de même hauteur (Setup Details / Scene Selection / Zone de
+détection à gauche, Real-Time Tuning en grille 2 colonnes + Advanced
+Commands à droite), rotations d'affichage. C'est un travail de portage
+HTML/CSS/JS substantiel à part entière, volontairement **non fait ici**
+(ce document est une analyse d'écart + plan, pas une implémentation UI
+complète) — voir "Plan d'action" plus bas pour où il se situe dans
+l'ordre des priorités.
+
+**À porter dans l'état final du 6001B, pas dans un état intermédiaire** :
+inutile de refaire les 4 itérations qu'a demandées la mise en page de la
+page Configure côté 6001B — copier directement la version validée.
 
 ### 3. JSON de sortie `/hlk_targets.json`
 
