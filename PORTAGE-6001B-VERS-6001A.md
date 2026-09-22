@@ -1,8 +1,8 @@
-# Portage du travail 6001B (2026-09-16 → 2026-09-21) vers le 6001A
+# Portage du travail 6001B (2026-09-16 → 2026-09-22) vers le 6001A
 
 Ce document complète PLAN.md (qui couvre le portage protocolaire initial,
-figé au 2026-09-09) avec un état des lieux daté du **2026-09-21** : tout
-ce qui a été fait sur le projet HLK-LD6001B **après** cette date-là et qui
+figé au 2026-09-09) avec un état des lieux daté du **2026-09-22** : tout
+ce qui a été fait sur le projet HLK-LD6001B **après** le 2026-09-09 et qui
 n'a **jamais été répercuté** sur ce projet 6001A. Radar 6001A attendu
 sous peu (~2026-09-23) ; les prochaines unités qui arriveront seront
 toutes des 6001A, montées sur XIAO ESP32-S3 **Plus** (même carte que la
@@ -10,10 +10,10 @@ production 6001B actuelle) — l'ESP32S3N16R8 reste réservé comme outil de
 capture pass-through si du reverse-engineering est nécessaire sur ce
 module, exactement comme il l'a été pour le 6001B.
 
-## Constat : trois vagues de travail sur 6001B, aucune répercutée ici
+## Constat : quatre vagues de travail sur 6001B, aucune répercutée ici
 
 Le composant `hlk_ld6001a` actuel est figé à l'état de la **Phase 0**
-(2026-09-09, voir PLAN.md). Depuis, trois vagues de travail ont eu lieu
+(2026-09-09, voir PLAN.md). Depuis, quatre vagues de travail ont eu lieu
 sur `HLK-LD6001B/ESP32S3_Plus/` sans équivalent ici :
 
 1. **2026-09-16** — portage de l'UI vers un style "TI" (onglets
@@ -23,7 +23,16 @@ sur `HLK-LD6001B/ESP32S3_Plus/` sans équivalent ici :
 2. **2026-09-21 (session précédente)** — décodage et affichage du nuage
    de points brut (`TLV1`/`POINTLEN`), avec deux vrais bugs firmware
    trouvés et corrigés en route.
-3. **2026-09-21 (cette session)** — le présent document.
+3. **2026-09-21/22 (session suivante)** — rotations d'affichage
+   persistées, refonte de la page Configure, bandeau supérieur en grille
+   3 colonnes (voir `PLAN.md` Phase 12 du 6001B).
+4. **2026-09-22 (cette session)** — industrialisation complète de l'UI :
+   support tactile (Pointer Events, pincer-zoomer), boutons zoom/ajuster/
+   recentrer sur toutes les vues, infobulles sourcées du manuel
+   constructeur, conformité par champ, indicateurs de santé (uptime,
+   mémoire, WiFi, débit trames), pause/rémanence/export/inspection d'un
+   point — voir `HLK-LD6001B/ESP32S3_Plus/PLAN.md` Phase 13 et
+   `PLAN-UI-INDUSTRIALISATION.md` pour le détail complet, non répété ici.
 
 ## Ce qui se porte directement, sans travail supplémentaire
 
@@ -106,25 +115,52 @@ terrain, donc à vérifier, jamais supposé) :
   byte-map) ; dans le second, ranger cette fonctionnalité comme non
   applicable au 6001A et le documenter comme tel dans PROTOCOL.md.
 
-### 2. Portage de l'UI TI-style (Configure/Plots) — pas fait dans ce document
+### 2. Portage de l'UI TI-style + industrialisation (Configure/Plots/HLK) — pas fait dans ce document
 
 Le composant 6001A est resté sur l'ancien `VIEWER_HTML` à 3 onglets
 (Pièce / Radar / Console AT) du Phase 0 — il n'a reçu ni le remaniement
 du 2026-09-16 (style TI, Configure/Plots), ni la page HLK du 2026-09-21,
-ni la refonte du 2026-09-22 (voir `HLK-LD6001B/ESP32S3_Plus/PLAN.md`
-Phase 12) : sélecteur HLK/Plots/Configure avec HLK par défaut, état radar
-dans le bandeau supérieur plutôt qu'en onglet, page Configure en deux
-colonnes de même hauteur (Setup Details / Scene Selection / Zone de
-détection à gauche, Real-Time Tuning en grille 2 colonnes + Advanced
-Commands à droite), rotations d'affichage. C'est un travail de portage
-HTML/CSS/JS substantiel à part entière, volontairement **non fait ici**
-(ce document est une analyse d'écart + plan, pas une implémentation UI
-complète) — voir "Plan d'action" plus bas pour où il se situe dans
-l'ordre des priorités.
+ni la refonte du 2026-09-21/22 (rotations, page Configure deux colonnes,
+bandeau 3 colonnes), ni l'industrialisation du 2026-09-22 (voir
+`HLK-LD6001B/ESP32S3_Plus/PLAN.md` Phases 12-13 et
+`PLAN-UI-INDUSTRIALISATION.md`) :
+
+- sélecteur HLK/Plots/Configure avec HLK par défaut, état radar dans le
+  bandeau supérieur (grille 3 colonnes, jamais de chevauchement quelle
+  que soit la largeur d'écran) plutôt qu'en onglet ;
+- page Configure en deux colonnes de même hauteur (Setup Details enrichi
+  / Scene Selection / Zone de détection à gauche, Real-Time Tuning en
+  grille 2 colonnes + Advanced Commands à droite), infobulles sourcées du
+  manuel constructeur sur chaque réglage, commande AT+ et conformité
+  affichées sous chaque champ, "Enregistrer" désactivé tant que rien n'a
+  changé ;
+- toutes les vues 2D/3D avec support tactile complet (Pointer Events, un
+  doigt glisse, deux doigts pincent pour zoomer — indispensable, pas
+  cosmétique : sans ça ces vues sont totalement figées sur iPad) plus
+  boutons zoom/ajuster/rotation/recentrer et échelle affichée ;
+- indicateurs de santé (uptime, mémoire libre, WiFi, récupérations
+  watchdog, débit de trames) transportés dans `/hlk_targets.json`
+  existant (**jamais une nouvelle route sondée en boucle** — l'épuisement
+  de sockets déjà vécu deux fois sur le 6001B l'écarte d'office, voir
+  MAINTENANCE.md du 6001B) et bandeau "données figées" au-delà de 3
+  sondages échoués ;
+- page HLK : pause, rémanence (N dernières trames en fondu), export JSON,
+  inspection d'un point au tap/clic (X/Y/Z/D uniquement — même décision à
+  reprendre ici si/quand le nuage de points du 6001A est décodé, voir
+  point 1 ci-dessus).
+
+C'est un travail de portage HTML/CSS/JS substantiel à part entière,
+volontairement **non fait ici** (ce document est une analyse d'écart +
+plan, pas une implémentation UI complète) — voir "Plan d'action" plus bas
+pour où il se situe dans l'ordre des priorités.
 
 **À porter dans l'état final du 6001B, pas dans un état intermédiaire** :
-inutile de refaire les 4 itérations qu'a demandées la mise en page de la
-page Configure côté 6001B — copier directement la version validée.
+inutile de refaire les nombreuses itérations qu'ont demandées la page
+Configure puis l'industrialisation côté 6001B — copier directement la
+version validée (commit `3967334` et suivants sur
+`github.com/thieryus007-cloud/HLK-6001B`, golden-image
+`plus_68ee8f4d1988_full_flash_16MB_2026-09-22_post-industrialisation.bin`
+comme référence de l'état fonctionnel correspondant).
 
 ### 3. JSON de sortie `/hlk_targets.json`
 
@@ -219,8 +255,11 @@ ESPHome le suggère.
 5. Porter le parsing C++ du nuage de points (`process_debug3_frame_()`,
    nouveaux champs `latest_point_*_`, tableau JSON `points`) une fois le
    format confirmé.
-6. Porter l'UI TI-style (Configure/Plots) puis la page HLK, en
-   réutilisant `makeHlk2DView()` et le correctif CSS iPad tels quels.
+6. Porter l'UI TI-style + l'industrialisation complète (Configure/Plots/
+   HLK, voir point 2 ci-dessus) dans son état final du 6001B, en
+   réutilisant `makeHlk2DView()` (zoom/pan/rotation/tactile/inspection),
+   la barre d'outils `.view-toolbar`/`.view-tool-btn` et le correctif CSS
+   iPad tels quels.
 7. Golden-image + documentation, même processus que le 6001B
    (`Clone_ESP32S3/README-*.md`).
 
