@@ -1,209 +1,219 @@
 # Référence technique — protocole radar et composant ESPHome
 
-Voir PLAN.md pour la méthodologie de recoupement des sources (manuel
-Hi-Link > datasheet MinewSemi MS72SF1 > code testé de Devristo) et le
-journal des vérifications faites directement dans les PDF.
+Ce qui suit décrit le module réellement livré et testé (radar HLK-LD6001A,
+firmware radar `NOP_2.11-20260525-minesemi`). Les écarts avec les deux
+manuels (Hi-Link V1.1, datasheet MinewSemi MS72SF1) sont signalés là où
+ils existent ; le détail des tests qui les établissent est dans PLAN.md
+(« Journal Phase 1 »).
 
 ## Câblage
 
-Identique au HLK-LD6001B (mêmes broches, même alimentation) — confirmé
-directement dans le manuel Hi-Link V1.1 §4.1/§4.4, pas seulement supposé
-par analogie.
+Identique au HLK-LD6001B (mêmes broches, même alimentation).
 
-| Radar (LD6001A) | XIAO ESP32-S3 (silkscreen / GPIO) | Fonction |
+| Radar (LD6001A) | XIAO ESP32-S3 Plus (silkscreen / GPIO) | Fonction |
 |---|---|---|
 | TX  | D7 / GPIO44 | RX de l'ESP32 (croisé) |
 | RX  | D6 / GPIO43 | TX de l'ESP32 (croisé) |
 | 3V3 | 3.3V-OUT    | Alimentation radar |
 | GND | GND         | Masse commune |
 
-GPIO43/44 sont aussi l'UART0 par défaut du ROM bootloader de l'ESP32-S3 —
-le logger applicatif reste forcé sur l'USB natif
-(`logger: hardware_uart: USB_SERIAL_JTAG`).
+GPIO43/44 sont l'UART0 par défaut du bootloader ROM : le logger reste sur
+l'USB natif (`logger: hardware_uart: USB_SERIAL_JTAG`), et le bus radar est
+déclaré en **deuxième** bloc `uart:` (un bus factice GPIO17/18 consomme
+`UART_NUM_0`) pour que le radar soit sur `UART_NUM_1` — sur `UART_NUM_0`,
+aucune commande `AT+` n'obtient de réponse (constaté sur le 6001B).
 
-**Règle absolue** : aucun second maître UART ne doit jamais être câblé en
-parallèle sur les broches TX/RX du radar pendant que l'ESP32 y est
-connecté — voir MAINTENANCE.md.
+**Règle absolue** : aucun second maître UART ne doit être câblé en
+parallèle sur TX/RX du radar pendant que l'ESP32 y est connecté.
 
-UART : **115200 bauds** (à vérifier au premier branchement — voir
-"Débit UART" ci-dessous), 8 bits, 1 stop, pas de parité, pas de contrôle
-de flux.
+UART : **115200 bauds** (confirmé sur le module ; la mention « 921600 par
+défaut » de la table `AT+BAUD` du manuel Hi-Link ne s'applique pas), 8N1,
+sans contrôle de flux.
 
-Alimentation : pic ~530mA (démarrage RF), veille ~80mA, moyenne ~110mA à
-un cycle de 100ms — manuel Hi-Link §4.4, chiffres identiques au 6001B.
-Alimentation ≥1A requise.
+Alimentation : pic ~530 mA, veille ~80 mA, moyenne ~110 mA à 100 ms
+(manuel Hi-Link §4.4) ; alimentation ≥ 1 A requise.
 
-## Débit UART — à vérifier en premier à l'arrivée du matériel
+## Modes de sortie (`AT+DEBUG=X`)
 
-Le manuel Hi-Link se contredit lui-même : le tableau `AT+BAUD` (réglages
-courants, §6) dit "default value is 921600", mais l'outil hôte décrit en
-§7.3 et l'usage général du document supposent 115200. **Essayer 115200
-d'abord** (valeur par défaut de ce firmware ESPHome) ; si aucune trame ne
-sort, réessayer à 921600 avant de suspecter le câblage ou le module —
-voir DEPLOYMENT.md/MAINTENANCE.md pour la procédure.
+| Mode | Sortie | Utilisation |
+|---|---|---|
+| 0 (défaut du module) | trames `55 AA`, TYPE 0x04 = nombre de personnes seul | reconnues et validées (checksum), non décodées |
+| 2 (« logiciel PC ») | trames TLV **avec nuage de points, sans octet de checksum** | **mode d'exploitation du composant** |
+| 3 (« protocole détaillé ») | trames TLV avec octet de checksum, `POINTLEN` toujours 0 selon le manuel | accepté par le parseur, non utilisé |
 
-## Architecture protocolaire : une seule source de position (différence majeure avec le 6001B)
+Le mode d'exploitation est une constante (`RADAR_OPERATING_DEBUG_MODE` dans
+`hlk_ld6001a.h`).
 
-Contrairement au HLK-LD6001B (où le protocole normal `AT+DEBUG=0` porte
-déjà X/Y/Z et `AT+DEBUG=2` est additif), le HLK-LD6001A n'expose de
-position/vitesse/ID **que** via `AT+DEBUG=3`. Le protocole normal
-(`AT+DEBUG=0`, TYPE=0x04) ne donne qu'un compte de personnes, sans
-coordonnées — ce composant démarre donc directement en `AT+DEBUG=3` et ne
-décode pas le flux TYPE=0x04 au-delà de la reconnaissance de trame (voir
-plus bas).
-
-### Protocole normal (`AT+DEBUG=0`, défaut du module) — reconnu mais pas décodé
+## Trame TLV (`AT+DEBUG=2` et `3`)
 
 ```
-FH(2) | LENGTH(1) | TYPE(1) | DATA(LENGTH-4) | CHECK(1)
-```
-Confirmé identique octet pour octet au 6001B (même position de `CHECK`,
-même algorithme XOR) via l'exemple chiffré du manuel Hi-Link §7.1 :
-`55 AA 0A 04 00 00 00 00 00 0E` (TYPE=0x04, "0E" = XOR de `0A 04 00 00 00
-00 00`, vérifié). Le composant reconnaît ce header et valide son checksum
-pour "avaler" proprement la trame (et nourrir le watchdog) mais **ne
-décode pas son contenu** : `AT+DEBUG=3` fournit déjà un compte de
-personnes (`TRACKLEN/32`) qui rend ce compte redondant, sans qu'aucune
-coordonnée ne soit disponible sur ce flux de toute façon.
-
-### Protocole détaillé (`AT+DEBUG=3`) — source unique de position/vitesse/ID
-
-```
-HEAD(8) | LENGTH(4) | FRAME(4) | TLV1(4) | POINTLEN(4) | <point-cloud, POINTLEN octets> | TLV2(4) | TRACKLEN(4) | <personnes, TRACKLEN octets> | CHECK(1)
+HEAD(8) | LENGTH(4) | FRAME(4) | TLV1(4) | POINTLEN(4) | <points> | TLV2(4) | TRACKLEN(4) | <personnes> | [CHECK(1)]
 ```
 
-- `HEAD` : fixe, `01 02 03 04 05 06 07 08`.
-- `LENGTH` : uint32 LE. **Ne compte PAS l'octet `CHECK` final** — la
-  trame réelle sur le fil fait `LENGTH + 1` octets. Point non écrit
-  explicitement dans le manuel, déduit et vérifié par calcul sur son
-  propre exemple chiffré (65 octets réels pour `LENGTH=64`) — voir
-  PLAN.md, Journal Phase 0.
-- `FRAME` : compteur de trame, uint32 LE.
-- `TLV1` : attendu `1`.
-- `POINTLEN` : longueur en octets du nuage de points qui suit. Le manuel
-  affirme "toujours 0" — **décodé dynamiquement dès le premier jour sans
-  jamais supposer 0**, leçon directement héritée du 6001B (où cette même
-  hypothèse s'est révélée fausse sur le terrain, voir PLAN.md).
-- `TLV2` : attendu `2`.
-- `TRACKLEN` : longueur en octets des enregistrements personne ;
-  `nombre_personnes = TRACKLEN / 32`.
-- Chaque enregistrement personne (32 octets, toutes valeurs little-endian) :
+Tous les champs sont little-endian.
 
-| Offset (relatif à l'enregistrement) | Taille | Champ |
+- `HEAD` : `01 02 03 04 05 06 07 08`.
+- `LENGTH` : en `DEBUG=2`, taille exacte de la trame (l'en-tête suivant
+  commence à l'offset `LENGTH`). En `DEBUG=3` (exemple chiffré du manuel
+  §7.2.2), `LENGTH` n'inclut pas l'octet `CHECK` final.
+- `FRAME` : compteur de trame (+1 par trame, ~10 trames/s avec `TIME=100`).
+- `TLV1` = 1, puis `POINTLEN` octets de nuage de points (multiple de 25).
+- `TLV2` = 2, puis `TRACKLEN` octets de personnes (32 octets chacune).
+- `CHECK` (`DEBUG=3` seulement) : XOR de `FRAME` (4 octets) et de tous les
+  octets des personnes.
+
+**Validation structurelle** (les deux modes) : `TLV1 == 1`, `TLV2 == 2` et
+`LENGTH == 24 + POINTLEN + 8 + TRACKLEN` exactement. En `DEBUG=2`, sans
+checksum, c'est la seule vérification d'intégrité. Le cadrage (avec ou
+sans `CHECK`) est détecté automatiquement (`decide_tlv_framing_()`), avec
+les mêmes règles que le décodeur de référence Python
+`testing/radar_protocol_tlv.py`, testé par `testing/test_protocol_tlv.py`
+(octets réels `testing/fixtures/debug2_rx_2026-09-25.bin`, flux `DEBUG=3`
+synthétique, corruption, texte intercalé, bascules de mode).
+
+### Enregistrement personne (32 octets)
+
+| Offset | Taille | Champ |
 |---|---|---|
 | 0 | 4 | Q (réservé, uint32) |
 | 4 | 4 | ID (identifiant persistant, uint32) |
-| 8 | 4 | X (m, float32) |
-| 12 | 4 | Y (m, float32) |
-| 16 | 4 | Z (m, float32) |
+| 8 | 4 | X (m, float32 — gauche/droite) |
+| 12 | 4 | Y (m, float32 — avant/arrière) |
+| 16 | 4 | Z (m, float32 — hauteur/profondeur) |
 | 20 | 4 | Vx (m/s, float32) |
 | 24 | 4 | Vy (m/s, float32) |
 | 28 | 4 | Vz (m/s, float32) |
 
-- `CHECK` (1 octet, **hors** `LENGTH`) : XOR de `FRAME` (4 octets) +
-  **tous** les octets des enregistrements personne (`TRACKLEN` octets) —
-  **PAS** sur `LENGTH`/`TLV1`/`POINTLEN`/`TLV2`/`TRACKLEN`, et **PAS** sur
-  les octets du nuage de points. Confirmé et vérifié par calcul à la main
-  contre l'exemple chiffré du manuel (`0xCC`) — voir
-  `testing/test_protocol_debug3.py`. **Validé par ce composant** (trame
-  rejetée si le XOR ne correspond pas), contrairement au flux détaillé du
-  6001B où ce même mécanisme n'était pas confirmé et donc pas vérifié.
+### Enregistrement point (25 octets) — format supposé
 
-Décodeur de référence : `testing/radar_protocol_debug3.py`, validé contre
-l'exemple chiffré exact du manuel Hi-Link §7.2.2 (voir
-`testing/test_protocol_debug3.py`). Portage C++ direct dans
-`esphome/components/hlk_ld6001a/hlk_ld6001a.cpp::process_debug3_frame_()`.
+| Offset | Taille | Champ | Statut |
+|---|---|---|---|
+| 0 | 4 | X (m, float32) | valeurs plausibles, non validé contre une vérité terrain |
+| 4 | 4 | Y (m, float32) | idem |
+| 8 | 4 | Z (m, float32) | idem |
+| 12 | 1 | tag (int8) | sens inconnu |
+| 13 | 4 | D (float32) | pilote la couleur (légende constructeur : gris<2, cyan 2-3, bleu 3-4, vert 4-5, jaune 5-8, rouge>8) |
+| 17 | 4 | E (float32) | non utilisé (valeurs discrètes 255 / 8 / 7 observées) |
+| 21 | 4 | F (float32) | non utilisé |
 
-## Trame heartbeat (TYPE 0x02) — existence probable mais format non confirmé
+Taille de 25 octets confirmée sur le module ; contenu repris du format
+rétro-conçu sur le HLK-LD6001B, à valider par une campagne de vérité
+terrain sur ce module. Seuls X/Y/Z/D sont exposés.
 
-`AT+HEATIME` (intervalle heartbeat, 10-999s, défaut 60s) **existe** dans
-le manuel Hi-Link §6 — contrairement à une lecture précédente moins
-approfondie qui l'avait classée "non documentée". Mais **aucun des deux
-manuels ne documente le format binaire de la trame heartbeat elle-même**
-(pas de tableau de champs, pas d'exemple chiffré, contrairement au
-6001B). Ce composant n'essaie donc pas de la décoder pour l'instant — voir
-"Etat radar via AT+READ" ci-dessous pour le mécanisme de remplacement, et
-PLAN.md pour le test précis à faire en Phase 1 pour trancher si une trame
-`TYPE=0x02` apparaît réellement sur le fil.
+## Commandes `AT+` du firmware radar livré
 
-## Etat radar via `AT+READ` (pas via heartbeat, pour l'instant)
+Chaque commande ci-dessous a été testée sur le module et reliée à sa clé
+`AT+READ` par un test changement → relecture → restauration. Réponse en
+cas de succès : `AT+OK` ou `AT+OK=<valeur>`.
 
-`AT+READ` est une vraie commande (confirmée manuel Hi-Link §6 et
-Devristo) qui renvoie un bloc quasi-JSON avec les réglages courants —
-mais son format exact est **variable et mal formé selon la version de
-firmware** (aucune source ne donne un exemple chiffré exploitable). Ce
-composant l'envoie périodiquement (toutes les 15s, valeur arbitraire de
-ce premier portage — voir `AT_READ_POLL_INTERVAL_MS` dans
-`hlk_ld6001a.h`) via la file de commandes AT+, et affiche la réponse
-texte **brute, non analysée**, dans le bandeau "Etat radar" de la page
-web — pas de comparaison automatique "commandé vs. réel" comme sur le
-6001B tant que le format exact n'a pas été capturé sur du vrai matériel
-(Phase 1, voir PLAN.md).
+### Utilisées par le composant
 
-## Table des commandes `AT+`
+| Commande | Clé `AT+READ` | Rôle | Plage retenue / défaut |
+|---|---|---|---|
+| `AT+STOP` / `AT+START` | — | arrêt / démarrage du radar | séquence de configuration |
+| `AT+RESET` | — | réinitialisation | `on_boot`, watchdog, bouton « Redémarrer le radar » |
+| `AT+DEBUG=2` | — | mode de sortie | séquence de configuration |
+| `AT+DPKTHF=X` | `DPKF` | seuil de détection lointain (équivalent du `AT+DPKTH` du manuel : plus grand = moins sensible) | 1-9 / 4 |
+| `AT+DPKTHN=X` | `DPKN` | seuil de détection proche (absent des manuels, sens de variation non documenté) | 1-9 supposée / 5 (valeur à la livraison) |
+| `AT+RANGE=X` | `Range` | rayon du cercle de détection au sol (cm) | 10-500 / 450 |
+| `AT+HEIGHT=X` | `Height` | hauteur d'installation (cm) | 250-320 (datasheet MinewSemi) / 270 |
+| `AT+HRANGE=X` | `Hrange` | absent des manuels ; probablement la hauteur de balayage (non confirmé) | 50-500 supposée / 200 (valeur à la livraison) |
+| `AT+HEATIME=X` | `Heart_Time` | intervalle heartbeat (s) | 10-999 / 60 |
+| `AT+XNegaD=X` `AT+XPosiD=X` `AT+YNegaD=X` `AT+YPosiD=X` | `XdetectionN/P`, `YdetectionN/P` | bornes de la zone de détection (cm) | ±20..500 ; défaut du radar ±300 |
+| `AT+READ` | — | lecture des paramètres | radar **arrêté** uniquement |
+| toute autre commande | — | envoi libre avec accusé réel | panneau « Advanced Commands » |
 
-### Implémentées dans ce composant
+`AT+HEIGHT` : 250 et 320 sont acquittés ; 321 aussi ; 249 a été appliqué
+mais sans accusé. La plage documentée (250-320) est la seule retenue.
 
-| Commande | Rôle | Plage / défaut (manuel Hi-Link) |
-|---|---|---|
-| `AT+RESET` | Réinitialise le module | `on_boot`, watchdog |
-| `AT+DEBUG=3` | Démarre directement en mode détaillé (jamais 0) | `on_boot` |
-| `AT+START` / `AT+STOP` | Démarre/arrête le radar | `on_boot`, console web |
-| `AT+DPKTH=X` | Sensibilité longue distance (plus grand = moins sensible) | 1-9, défaut 4 |
-| `AT+RANGE=XXX` | Rayon du cercle de détection au sol (cm) | 10-500, défaut 450 |
-| `AT+HEIGHTD=XXX` | Distance verticale d'installation (cm) | 50-500, défaut 300 |
-| `AT+XNega=`/`AT+XPosi=`/`AT+YNega=`/`AT+YPosi=` | Zone de détection rectangulaire unique (cm, entiers signés, **sans le "D"** — voir note ci-dessous) | X-: -500..-20 déf. -450 · X+: 20..500 déf. 450 · Y-: -500..-20 déf. -450 · Y+: 20..500 déf. 450 |
-| `AT+READ` | Sondage périodique (15s) pour le bandeau "Etat radar" | — |
-| toute autre commande `AT+...` | Envoi libre, avec accusé de réception réel | Onglet "Console AT" |
+### Refusées par ce firmware (`AT+ERR`)
 
-**Note sur le "D" des commandes de zone** : le manuel Hi-Link documente
-`AT+XNegaD=`/`AT+XPosiD=`/`AT+YNegaD=`/`AT+YPosiD=` (AVEC un "D"). Ce
-composant envoie la forme **sans** "D" (`AT+XNega=`, etc.) parce que le
-code testé de Devristo (empiriquement validé sur du vrai 6001A,
-`assert(100<=x<=500)` etc.) utilise cette forme. **Cette décision n'a
-pas été re-vérifiée directement dans ce PDF ni sur du matériel réel** —
-voir PLAN.md, Journal Phase 0, point 4. Si `AT+ERR` est reçu en Phase 1,
-retomber sur la forme avec "D".
+`AT+DPKTH`, `AT+HEIGHTD`, `AT+Moving`, `AT+Static`, `AT+Exit` (commandes du
+manuel Hi-Link), `AT+XNega`/`AT+XPosi`/`AT+YNega`/`AT+YPosi` (forme sans
+« D »). Les autres clés de `AT+READ` (`PointTH`, `PointTHV`, `FreeTime`,
+`FreeTimeNoise`, `FreeNumNoise`, `TIME`, `PROG`) n'ont pas de commande
+d'écriture connue.
 
-### Documentées (manuel officiel) mais non exposées dans l'UI
+### Documentées, non utilisées
 
-| Commande | Rôle | Statut |
-|---|---|---|
-| `AT+BAUD=xx` | Débit série (défaut documenté 921600, contredit ailleurs) | Non exposé — risque de casser la communication |
-| `AT+RESTORE` | Restauration réglages usine | Non exposé — accessible via Console AT si besoin |
-| `AT+Moving=XXX` | Délai de disparition cible en mouvement (100ms, 5-1000, défaut 110) | Non exposé — pas de décision utilisateur prise sur ce réglage, voir PLAN.md |
-| `AT+Static=XXX` | Délai de disparition cible statique (100ms, 5-1000, défaut 100) | Idem |
-| `AT+Exit=XXX` | Délai de sortie de zone (100ms, 2-1000, défaut 5) | Idem |
+`AT+BAUD` (risque de rompre la liaison), `AT+RESTORE` (réglages usine —
+accessible via Advanced Commands).
 
-## Séquence de démarrage (`on_boot`)
+## Réponse `AT+READ`
 
-Identique dans l'esprit au 6001B (attente WiFi confirmée avant tout envoi
-au radar, pour éviter le brownout documenté dans MAINTENANCE.md du
-6001B) — adaptée pour aller directement en `AT+DEBUG=3` :
+Uniquement radar arrêté (en streaming, la réponse est `AT+ERR`). Une ligne
+pseudo-JSON, sans `AT+OK` :
 
-1. Attente d'une connexion WiFi confirmée (timeout 30s), puis 2s, puis
-   `AT+RESET` (YAML, `on_boot`).
-2. Côté composant C++ (`loop()`) : dès WiFi confirmé (ou après 32s de
-   secours), attente de 5s puis envoi des réglages sauvegardés
-   (`AT+DPKTH`, `AT+RANGE`, `AT+HEIGHTD`, et les 4 commandes de zone si
-   activée) via la file de commandes, chacun confirmé par un vrai
-   `AT+OK` ou abandonné après timeout.
-3. Une fois la file vidée : `AT+DEBUG=3` (pas `0` comme le 6001B), puis
-   `AT+START`.
+```
+{ "SoftVerison":"NOP_2.11-20260525-minesemi", "RangeRes":0.055664, "VelRes":0.111289,
+  "TIME":100, "PROG":2, "BautRate":115200, "Heart_Time":60, "DPKN":5, "DPKF":4,
+  "PointTHV":2, "PointTH":10, "FreeTime":20, "FreeTimeNoise":100, "FreeNumNoise":5,
+  "Hrange":200, "Height":270, "Range":450, "XdetectionN":-300, "XdetectionP":300,
+  "YdetectionN":-300, "YdetectionP":300 }
+```
+
+Le composant capture le bloc (`check_read_capture_()`), en extrait les clés
+ci-dessus (`parse_read_response_()`) et les expose dans
+`/radar_settings` → `live` : bandeau « Etat radar » et conformité par champ
+de la page Configure.
+
+## Trame heartbeat
+
+`AT+HEATIME` est accepté, mais aucune trame `55 AA` n'a été observée en
+`DEBUG=2`. Le composant journalise en hexadécimal la première trame `55 AA`
+de chaque TYPE reçue (`first 55 AA frame of TYPE 0x..`), ce qui permettra de
+relever le format si une trame heartbeat apparaît. « Etat radar » repose
+sur `AT+READ`, pas sur un heartbeat.
+
+## Séquence de configuration
+
+1. `on_boot` (YAML) : attente d'une connexion WiFi confirmée (30 s max),
+   2 s, puis `AT+RESET`.
+2. Composant (`loop()`) : 5 s après la connexion WiFi (secours : 32 s après
+   le boot), `apply_radar_settings_()` met en file, chacune attendant son
+   accusé réel (`AT+OK`/`AT+ERR`/`Save Para Fail`, sinon abandon après 5 s) :
+   `AT+STOP`, `AT+DPKTHF`, `AT+DPKTHN`, `AT+RANGE`, `AT+HEIGHT`, `AT+HRANGE`,
+   `AT+HEATIME`, les 4 bornes de zone (bornes configurées si la zone est
+   activée, ±500 sinon), `AT+READ`.
+3. File vidée (ou après 20 s) : `AT+DEBUG=2`, puis `AT+START` 500 ms plus tard.
+
+La même séquence (précédée de `AT+RESET`) est rejouée par le watchdog (90 s
+sans trame, 30 s minimum entre deux déclenchements) et par le bouton
+« Redémarrer le radar ». Un enregistrement des réglages rejoue les étapes
+2 et 3. Durée observée : ~1,4 s, 12 accusés `AT+OK` sur 12.
+
+Pas de `AT+STOP` dans `setup()` ni de `wifi: enable_on_boot: false` :
+mitigations brownout du 6001B non appliquées par décision explicite, à
+n'ajouter qu'en réaction à un brownout observé (MAINTENANCE.md).
 
 ## API HTTP du composant (serveur embarqué, port 80)
 
-Identique au 6001B (mêmes routes, même conception non bloquante pour
-`/at_command`) à une exception près : `/hlk_targets.json` ne porte
-**qu'un seul** tableau `targets` (position + vitesse + ID directement
-dans chaque entrée), il n'y a pas de second tableau `debug2Targets` à
-faire correspondre puisqu'il n'y a qu'une seule source de cibles.
-
 | Route | Méthode | Rôle |
 |---|---|---|
-| `/` | GET | Page web (onglets Pièce / Radar / Console AT) |
-| `/hlk_targets.json` | GET | Cibles décodées en temps réel : `{count, targets:[{id,x,y,z,vx,vy,vz}]}` |
-| `/room_config` | GET/POST | Géométrie de la pièce (affichage 3D uniquement) |
-| `/radar_settings` | GET/POST | Réglages radar commandés + `live.raw`/`live.seen` (réponse brute du dernier `AT+READ` réussi) |
-| `/at_command` | POST (`cmd=...`) | Console AT, non bloquant (voir `/at_command_result`) |
-| `/at_command_result` | GET | Résultat de la dernière commande AT envoyée via `/at_command` |
+| `/` | GET | page web (HLK / Plots / Configure) |
+| `/vendor/three.min.js`, `/vendor/OrbitControls.js` | GET | bibliothèques 3D embarquées (gzip), aucune dépendance Internet |
+| `/hlk_targets.json` | GET | cibles, nuage de points et indicateurs de santé (voir ci-dessous) |
+| `/room_config` | GET/POST | géométrie de pièce et rotations d'affichage (affichage seulement) |
+| `/radar_settings` | GET/POST | réglages radar commandés + `live` (dernière réponse `AT+READ`) |
+| `/at_command` | POST (`cmd=...`) | Advanced Commands, non bloquant, `409` si une commande est déjà en cours |
+| `/at_command_result` | GET | résultat de la dernière commande (`done`, `ok`, `timedOut`, `raw`) |
+| `/radar_restart` | POST | cycle complet (`AT+RESET` + séquence de configuration) |
+
+`/hlk_targets.json` : `count`, `targets[{id,x,y,z,vx,vy,vz}]`,
+`points[{x,y,z,d}]` (150 max), `pointLen`, `frameCount`, `rejectedFrames`,
+`framing` (`no_check`/`with_check`/`unknown`), `debugMode`, `uptimeS`,
+`freeHeap`, `rssi`, `recoveryCount`, `ssid`. Aucune autre route n'est
+sondée en boucle (risque d'épuisement du pool de sockets LWIP).
+
+`/radar_settings` : `sensFar`, `sensNear`, `rangeCm`, `heightCm`,
+`hrangeCm`, `heartbeatS`, `zone{enabled,xNeg,xPos,yNeg,yPos}`,
+`zoneDisabledBoundCm`, `debugMode`, `live{seen, ageS, version, sensFar,
+sensNear, rangeCm, heightCm, hrangeCm, heartbeatS, zone, raw}` (`null` =
+clé absente de la réponse). POST : `sens_far`, `sens_near`, `range_cm`,
+`height_cm`, `hrange_cm`, `heartbeat_s`, `zone_en`, `zone_x_neg`,
+`zone_x_pos`, `zone_y_neg`, `zone_y_pos` (validés côté serveur ; un champ
+invalide garde sa valeur précédente).
+
+`/room_config` : `width`, `length` (≤ 5 m), `height` (≤ 3 m), `radarHeight`,
+`wallOffsetM`, `mount` (0 plafond, 1 mur), `hlkViewRotation`,
+`topViewRotation` (0-3 × 90°, indépendantes). Persisté en flash.

@@ -1,5 +1,93 @@
 # Portage du travail 6001B (2026-09-16 → 2026-09-22) vers le 6001A
 
+## État au 2026-09-25 — portage réalisé et en service
+
+Matériel reçu (XIAO ESP32-S3 Plus `28:84:85:8a:be:00` + radar HLK-LD6001A).
+Sur demande de l'utilisateur (« effacer l'ancien soft et mettre en place
+le nouveau », « l'ancien site web n'est plus à jour »), l'état final du
+6001B a été porté d'un seul tenant, adapté au module, puis flashé et
+vérifié sur le matériel. Détail des tests : PLAN.md, « Journal Phase 1 ».
+
+**Repris tel quel du 6001B** : serveur HTTP (TCP_NODELAY, 11 routes,
+`max_uri_handlers` 12), Three.js/OrbitControls embarqués en gzip (octets
+et décompression vérifiés), `RoomConfig` avec les deux rotations et les
+limites 5 m / 3 m, indicateurs de santé dans `/hlk_targets.json`, route
+`/radar_restart`, file de commandes AT+ à accusé réel, watchdog, page web
+complète (HLK/Plots/Configure, tactile, zoom, rotation, pause/rémanence/
+export/inspection, bandeau 3 colonnes, données figées).
+
+**Adapté au 6001A** :
+- mode d'exploitation `AT+DEBUG=2` (seul mode avec nuage de points ;
+  trames sans checksum, vérifié sur 349 trames réelles), parseur
+  acceptant les deux cadrages, avec les règles validées d'abord en Python
+  (`testing/radar_protocol_tlv.py`) ;
+- nuage de points : enregistrements de 25 octets (taille confirmée),
+  format X/Y/Z/D du 6001B appliqué comme hypothèse ;
+- un seul tableau de cibles (ID + position + vitesse), l'appariement
+  entre les deux flux du 6001B est supprimé ;
+- **réglages = commandes réellement acceptées par le firmware radar
+  livré** (`NOP_2.11-20260525-minesemi`, MinewSemi) : `AT+DPKTHF`,
+  `AT+DPKTHN`, `AT+RANGE` (rayon), `AT+HEIGHT`, `AT+HRANGE`,
+  `AT+HEATIME`, zone `AT+XNegaD`/`XPosiD`/`YNegaD`/`YPosiD` (avec « D »).
+  `AT+DPKTH`, `AT+HEIGHTD`, `AT+Moving`/`Static`/`Exit` du manuel Hi-Link
+  répondent `AT+ERR` ;
+- « Etat radar » et conformité par champ alimentés par `AT+READ` (réponse
+  réelle capturée et décodée ; ne répond que radar arrêté, d'où `AT+STOP`
+  en tête de la séquence de configuration) ;
+- zone désactivée = bornes au maximum (±500) : le radar appliquait ±300
+  par défaut ;
+- `wifi_ssid()` déprécié (supprimé dans ESPHome 2026.9.0) remplacé par
+  `wifi_ssid_to()`.
+
+**Défauts latents du 6001B corrigés ici au passage** (non reportés sur le
+6001B, à décider) :
+1. « Enregistrer les réglages » ne s'active pas quand on modifie seulement
+   un champ de la Zone de détection ou la case « Activer », parce que
+   `#radar-zones` n'est plus dans `#radar-form` depuis la réorganisation
+   du 2026-09-22.
+2. `/radar_restart` appelle `send_reinit_sequence_()` depuis la tâche
+   httpd (écriture UART et file de commandes hors de la tâche
+   principale). Ici, le passage se fait par un drapeau lu dans `loop()`.
+3. Détection des réponses `AT+OK`/`AT+ERR` : effacer le tampon depuis son
+   début jusqu'à la fin de la ligne détruit une trame complète non encore
+   décodée qui précéderait la réponse. Ici, seule la ligne de réponse est
+   effacée.
+4. `wifi_ssid()` déprécié (le build 6001B cassera avec ESPHome 2026.9.0).
+
+**Vérifié sur le matériel** : boot propre (aucun brownout, sans les
+mitigations 6001B), 12 commandes de configuration acquittées `AT+OK` sur
+12, six réglages et bornes de zone relus conformes par `AT+READ`, ~9,4
+trames/s, 0 trame rejetée, page servie en 0,5 s, syntaxe JS des scripts
+servis valide, compilation sans avertissement (RAM 31,1 %, Flash 14,5 %).
+
+**Validé par l'utilisateur le 2026-09-25** : interface web et
+fonctionnement (« le reste est validé »), Home Assistant OK. L'invite de
+découverte « HLK-LD6001B plafond (XIAO ESP32-S3 Plus)
+(hlk-ld6001b-xiao-plus) » qui apparaît dans Home Assistant correspond au
+6001B de production (192.168.1.17, MAC `68:ee:8f:4d:19:88`), toujours
+sous tension sur le réseau — le 6001A s'annonce bien sous
+`hlk-ld6001a-xiao` (vérifié en mDNS et par son API). Installation au
+plafond reportée par l'utilisateur.
+
+### Suite (dans l'ordre)
+
+1. ~~Validation visuelle par l'utilisateur~~ — faite (2026-09-25).
+2. ~~Home Assistant~~ — fait (2026-09-25).
+3. **Nuage de points — vérité terrain** : une personne immobile à des
+   positions mesurées puis en marche (protocole GO/FAIT du 6001B,
+   bouton Exporter de la page HLK ou pont `plus-passthrough` avec
+   `point_cloud_capture.py`). Attendu si le format du 6001B s'applique :
+   la majorité des points à moins de 30 cm de la cible suivie (critère du
+   6001B). Sinon, rétro-ingénierie à reprendre sur le format du point.
+4. **Installation au plafond** (reportée par l'utilisateur) et réglage de
+   `AT+HEIGHT` sur la hauteur réelle. `AT+DPKTHN`/`AT+HRANGE` : sens de
+   variation à établir par essai si un réglage s'avère nécessaire.
+5. **Stabilité sur plusieurs heures** (compteur de récupérations, reset
+   reason) avant usage sans surveillance.
+6. **Image de référence** (`esptool read-flash`, 16 Mo) et commit/push du
+   dépôt `HLK-6001A`, sur demande de l'utilisateur.
+
+
 Ce document complète PLAN.md (qui couvre le portage protocolaire initial,
 figé au 2026-09-09) avec un état des lieux daté du **2026-09-22** : tout
 ce qui a été fait sur le projet HLK-LD6001B **après** le 2026-09-09 et qui

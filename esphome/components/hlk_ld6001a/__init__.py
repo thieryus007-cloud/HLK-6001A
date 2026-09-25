@@ -23,8 +23,7 @@ CONFIG_SCHEMA = (
     .extend(cv.COMPONENT_SCHEMA)
 )
 
-# Debit ambigu selon la source (voir PROTOCOL.md, "Debit UART") -- 115200
-# retenu par defaut, a corriger dans le YAML si le module ne repond pas.
+# 115200 bauds, confirme sur le module livre (voir PROTOCOL.md).
 FINAL_VALIDATE_SCHEMA = uart.final_validate_device_schema(
     "hlk_ld6001a",
     require_tx=True,

@@ -60,8 +60,8 @@ def _id_schema():
     )
 
 
-# No respiration/heartrate/gesture here (unlike HLK-LD6001B): AT+DEBUG=3
-# doesn't provide them at all for this module -- see PROTOCOL.md.
+# No respiration/heartrate/gesture here (unlike HLK-LD6001B): this module's
+# TLV stream doesn't provide them at all -- see PROTOCOL.md.
 CONFIG_SCHEMA = cv.Schema(
     {
         cv.GenerateID(CONF_HLK_LD6001A_ID): cv.use_id(HlkLd6001aComponent),

@@ -1,6 +1,6 @@
 substitutions:
   name: "hlk-ld6001a-xiao"
-  friendly_name: "HLK-LD6001A plafond (XIAO ESP32-S3)"
+  friendly_name: "HLK-LD6001A plafond (XIAO ESP32-S3 Plus)"
 
 esphome:
   name: "${name}"
@@ -8,8 +8,13 @@ esphome:
   # Meme sequence de demarrage prudente que le projet HLK-LD6001B (attente
   # WiFi confirmee avant tout AT+RESET, evite le brownout documente dans
   # HLK-LD6001B/XIAO-ESP32S3/MAINTENANCE.md) -- voir PROTOCOL.md et
-  # hlk_ld6001a.cpp::loop() pour la suite de la sequence (reglages puis
-  # AT+DEBUG=3, pas AT+DEBUG=0 comme le 6001B).
+  # hlk_ld6001a.cpp::loop() pour la suite de la sequence (AT+STOP, reglages,
+  # AT+READ, puis AT+DEBUG=2 et AT+START).
+  #
+  # Volontairement PAS de AT+STOP dans setup() ni de wifi enable_on_boot:
+  # false/delai (mitigations brownout du 6001B Plus) : decision explicite de
+  # l'utilisateur du 2026-09-21, a n'appliquer qu'en reaction a un brownout
+  # reellement observe sur le 6001A (PORTAGE-6001B-VERS-6001A.md).
   on_boot:
     priority: -100
     then:
@@ -22,9 +27,14 @@ esphome:
           id: radar_uart
           data: "AT+RESET\n"
 
+# Seeed XIAO ESP32-S3 PLUS (2026-09-25) -- meme carte que la production
+# HLK-LD6001B : board id officiel seeed_xiao_esp32_s3_plus (ESPHome
+# 2026.8.0), flash 16MB (puce Puya P25Q128HA, verifiee par esptool flash-id
+# sur cette unite le 2026-09-21), meme UART0 natif D6/D7 et meme USB natif.
 esp32:
-  board: seeed_xiao_esp32s3
+  board: seeed_xiao_esp32_s3_plus
   variant: esp32s3
+  flash_size: 16MB
   framework:
     type: esp-idf
     # Meme raison que le projet HLK-LD6001B : le composant hlk_ld6001a
@@ -40,6 +50,12 @@ esp32:
 # radar ci-dessous.
 logger:
   hardware_uart: USB_SERIAL_JTAG
+
+# Visibilite bas niveau cote Home Assistant (reprise du 6001B, "durcissement
+# fiabilite" du 2026-09-16) : raison du dernier reset (ex. "Brownout
+# reset"), memoire, duree de boucle, uptime -- diagnostic seulement, aucun
+# effet sur le comportement du radar. Entites dans sensor:/text_sensor:.
+debug:
 
 api:
 
@@ -72,9 +88,9 @@ external_components:
 #   radar TX -> XIAO D7 (GPIO44) => GPIO44 est le RX de l'ESP32
 #   radar RX -> XIAO D6 (GPIO43) => GPIO43 est le TX de l'ESP32
 #
-# Debit ambigu selon la source (voir PROTOCOL.md, "Debit UART") -- 115200
-# essaye en premier ; passer a 921600 si aucune trame ne sort au premier
-# branchement (voir DEPLOYMENT.md).
+# Debit : 115200, confirme sur le vrai module le 2026-09-25 (trames TLV
+# decodees sans erreur a ce debit) -- la mention "921600 par defaut" de la
+# table AT+BAUD du manuel ne correspond pas au module livre.
 #
 # 2026-09-21, correctif preventif porte depuis le projet HLK-LD6001B (voir
 # PORTAGE-6001B-VERS-6001A.md) : ce bus radar est volontairement le
@@ -120,6 +136,15 @@ binary_sensor:
       name: "Presence"
 
 sensor:
+  - platform: debug
+    free:
+      name: "Heap Free"
+    block:
+      name: "Heap Max Block"
+    loop_time:
+      name: "Loop Time"
+  - platform: uptime
+    name: "Uptime"
   - platform: hlk_ld6001a
     target_count:
       id: people_count_sensor
@@ -127,8 +152,8 @@ sensor:
     recovery_count:
       name: "Radar Recovery Count"
     # Pas de Respiration/Frequence cardiaque/Geste ici (contrairement au
-    # HLK-LD6001B) : le protocole AT+DEBUG=3 ne fournit pas ces champs du
-    # tout pour ce module -- voir PROTOCOL.md.
+    # HLK-LD6001B) : le flux TLV de ce module ne fournit pas ces champs du
+    # tout -- voir PROTOCOL.md.
     target_1_x:
       name: "Target 1 X"
     target_1_y:
@@ -213,3 +238,11 @@ sensor:
       name: "Target 6 Vz"
     target_6_id:
       name: "Target 6 ID"
+
+text_sensor:
+  # Raison du dernier reset ("Power on", "Brownout reset", "Task
+  # watchdog"...) -- l'information qu'il avait fallu chercher a la main en
+  # capture serie pendant le diagnostic brownout du 6001B Plus.
+  - platform: debug
+    reset_reason:
+      name: "Reset Reason"

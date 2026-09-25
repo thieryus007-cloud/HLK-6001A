@@ -1,68 +1,62 @@
 // Custom ESPHome external component for the Hi-Link HLK-LD6001A 60GHz
-// multi-target mmWave radar. Direct port of the HLK-LD6001B project's
-// component (same XIAO ESP32-S3 board, same external-component pattern,
-// same 3D-viewer/AT-command-queue/watchdog architecture) -- see
-// ../../../PLAN.md for the full list of protocol differences that drove
-// every change below, and ../../../PROTOCOL.md for the field reference.
+// multi-target mmWave radar (MS72SF1 chipset). Architecture, web UI and HTTP
+// API ported from the final state of the HLK-LD6001B project
+// (HLK-LD6001B/ESP32S3_Plus, 2026-09-22 -- same XIAO ESP32-S3 Plus board,
+// same external-component pattern); protocol handling specific to this
+// module -- see ../../../PROTOCOL.md for the field reference and
+// ../../../PLAN.md for the evidence behind every choice below.
 //
-// The single biggest architectural difference from the 6001B: this module
-// has only ONE source of target position/velocity/ID (AT+DEBUG=3). The
-// 6001B's AT+DEBUG=0 default protocol already carries X/Y/Z and AT+DEBUG=2
-// is additive (own ID/velocity stream, matched by nearest position since
-// there's no shared key). Here AT+DEBUG=0 only ever gives a person COUNT,
-// no coordinates -- so this component starts directly in AT+DEBUG=3 and
-// there is no second stream to reconcile, no matchDebug2Targets()
-// equivalent, no separate resp/heart/gesture sensors (this protocol
-// doesn't provide them at all, unlike the 6001B where they exist but are
-// always 0 on every unit tested).
+// Operating mode: AT+DEBUG=2 (RADAR_OPERATING_DEBUG_MODE). The manual calls
+// it the "debug mode (used by the host computer)"; on the real module
+// (2026-09-25 capture, testing/fixtures/debug2_rx_2026-09-25.bin) it emits
+// the same TLV frames as the documented AT+DEBUG=3, WITH the point cloud
+// (POINTLEN > 0, always a multiple of 25) -- which the HLK page needs --
+// and WITHOUT the trailing checksum byte AT+DEBUG=3 has. Both framings are
+// accepted by the parser (decide_tlv_framing_()), so switching to DEBUG=3
+// is a one-constant change.
 //
-// Frame layout (AT+DEBUG=3, the only frame this component decodes):
-//   HEAD        8 bytes   fixed 01 02 03 04 05 06 07 08
-//   LENGTH      4 bytes   uint32 LE, HEAD..end of person records -- does
-//                         NOT include the trailing CHECK byte (verified by
-//                         hand against the manual's own worked example,
-//                         see PLAN.md "Journal Phase 0" -- a real frame on
-//                         the wire is LENGTH+1 bytes).
-//   FRAME       4 bytes   uint32 LE, frame counter (not currently used)
-//   TLV1        4 bytes   uint32 LE, expected 1 (point-cloud marker)
-//   POINTLEN    4 bytes   uint32 LE, bytes of point-cloud data to skip.
-//                         Manual claims "always 0" -- decoded dynamically
-//                         anyway, direct lesson from the 6001B project
-//                         where that same assumption was field-proven
-//                         false (see PLAN.md).
-//   <POINTLEN bytes, not decoded>
-//   TLV2        4 bytes   uint32 LE, expected 2 (person/track marker)
-//   TRACKLEN    4 bytes   uint32 LE, num_persons = TRACKLEN / 32
-//   <TRACKLEN bytes, 32-byte person records>:
-//       Q       4 bytes   uint32 LE, reserved
-//       ID      4 bytes   uint32 LE, persistent target ID
-//       X,Y,Z            float32 LE, metres
-//       Vx,Vy,Vz         float32 LE, m/s
-//   CHECK       1 byte    XOR of FRAME (4 bytes) + every byte of the
-//                         person records above -- NOT over
-//                         LENGTH/TLV1/POINTLEN/TLV2/TRACKLEN, NOT over any
-//                         point-cloud bytes. Confirmed by hand against the
-//                         manual's own worked example (0xCC) -- see
-//                         testing/test_protocol_debug3.py. VALIDATED here
-//                         (frame rejected on mismatch), unlike the 6001B's
-//                         DEBUG2 checksum which was never confirmed and so
-//                         never checked.
+// TLV frame (little-endian):
+//   HEAD 8 (01..08) | LENGTH 4 | FRAME 4 | TLV1=1 4 | POINTLEN 4 |
+//   <points, 25 bytes each> | TLV2=2 4 | TRACKLEN 4 |
+//   <persons, 32 bytes each: Q, ID, X, Y, Z, Vx, Vy, Vz> | [CHECK 1]
+//   DEBUG=2: LENGTH = exact frame size, no CHECK (349/349 real frames).
+//   DEBUG=3: LENGTH excludes a trailing CHECK = XOR(FRAME + person records)
+//            (manual's worked example, 0xCC).
+//   Structural validation in both: TLV1 == 1, TLV2 == 2,
+//   LENGTH == 24 + POINTLEN + 8 + TRACKLEN exactly.
+// Reference decoder, same decision rules: testing/radar_protocol_tlv.py.
 //
-// The default AT+DEBUG=0 protocol (55 AA framing, TYPE=0x04 = person count
-// only, no coordinates) is recognized on the wire (checksum-validated, same
-// XOR algorithm as the 6001B's normal protocol -- confirmed against the
-// manual's own worked example) so it can be cleanly consumed and feed the
-// watchdog, but its payload is never decoded: AT+DEBUG=3 already provides
-// a person count (TRACKLEN/32) that makes it redundant, and it carries no
-// coordinates anyway.
+// Point record (25 bytes): X,Y,Z float32 @0/4/8, tag int8 @12, D float32 @13
+// (E/F @17/21 not stored) -- layout HYPOTHESIS carried over from the 6001B
+// (validated there against ground truth), not yet validated against ground
+// truth on this module. Only X/Y/Z/D are exposed, D drives the vendor-tool
+// colour legend on the HLK page.
 //
-// Heartbeat (TYPE 0x02) status: AT+HEATIME (heartbeat interval, 10-999s)
-// IS documented for this module, but neither manual documents the
-// heartbeat FRAME's byte layout (no field table, no worked example, unlike
-// the 6001B). This component therefore does not attempt to decode one --
-// see AT_READ_POLL_INTERVAL_MS below for the "Etat radar" replacement
-// mechanism, and PLAN.md for the precise Phase 1 test that will confirm or
-// rule out a real heartbeat frame on the wire.
+// Radar firmware on the delivered module: "NOP_2.11-20260525-minesemi"
+// (MinewSemi). Its AT+ command set differs from the Hi-Link manual -- every
+// command below was tested on the real module 2026-09-25, each mapped to its
+// AT+READ key by a change-then-restore test (PLAN.md, Journal Phase 1):
+//   AT+DPKTHF (DPKF, far sensitivity -- the manual's AT+DPKTH answers AT+ERR)
+//   AT+DPKTHN (DPKN, near sensitivity -- in neither manual)
+//   AT+RANGE (Range), AT+HEIGHT (Height -- AT+HEIGHTD answers AT+ERR),
+//   AT+HRANGE (Hrange -- in neither manual), AT+HEATIME (Heart_Time),
+//   AT+XNegaD/XPosiD/YNegaD/YPosiD (Xdetection*/Ydetection* -- WITH the "D",
+//   the form without it answers AT+ERR).
+// AT+Moving/AT+Static/AT+Exit (manual Hi-Link) answer AT+ERR in every
+// spelling tried -- not used.
+//
+// AT+READ: replies with a one-line pseudo-JSON block ('{ "SoftVerison":...,
+// "RangeRes":..., ..., "YdetectionP":300 }'), not an AT+OK line -- captured
+// by read_capture_* below and parsed key by key (parse_read_response_()),
+// feeding the top-bar "Etat radar" and the per-field conformity of the
+// Configure page. It answers AT+ERR while the radar streams and the block
+// once stopped (both observed 2026-09-25) -- so it is sent from
+// apply_radar_settings_(), after AT+STOP and before the final AT+START.
+//
+// The default AT+DEBUG=0 protocol (55 AA, TYPE 0x04 = person count only) is
+// still recognised and checksum-validated (keeps the watchdog fed, logs the
+// first frame of each TYPE for the heartbeat question -- AT+HEATIME exists,
+// its frame layout is undocumented), never decoded further.
 #pragma once
 #include "esphome/core/component.h"
 #include "esphome/core/defines.h"
@@ -74,8 +68,11 @@
 #endif
 #include "esphome/components/uart/uart.h"
 #include "esphome/core/preferences.h"
+// Setup Details health indicators (RSSI/SSID) -- same mechanism as the 6001B.
+#include "esphome/components/wifi/wifi_component.h"
 
 #include <esp_http_server.h>
+#include <esp_system.h>
 #include <deque>
 #include <functional>
 #include <string>
@@ -83,58 +80,47 @@
 
 namespace esphome::hlk_ld6001a {
 
-// Protocol supports up to 10 tracked people (manual Hi-Link, "Product
-// features"); 6 covers realistic room occupancy and matches the web UI's
-// 6-cell target table -- same reasoning and same value as the 6001B
-// project, explicit user decision 2026-09-09 (PLAN.md, "Points ouverts").
+// Explicit user decision 2026-09-09 (PLAN.md, "Points ouverts"): 6 targets,
+// matching the web UI's fixed 6-slot target table.
 static const uint8_t MAX_TARGETS = 6;
 
-// Installation geometry filter -- identical reasoning to the 6001B
-// (manual Hi-Link recommends ceiling mount at 2.5-3.0m; no real target can
-// physically be within 30cm of the radar itself).
+// Raw point-cloud cap -- same value as the 6001B (busiest real 6001A frame so
+// far: 4 points; 6001B: 15). Bounds heap/JSON size against radar noise.
+static const uint16_t MAX_POINTS = 150;
+
+// See the header comment: 2 = host-computer mode (TLV + point cloud, no
+// checksum), 3 = documented detailed protocol (TLV + checksum, no points).
+static const uint8_t RADAR_OPERATING_DEBUG_MODE = 2;
+
+// Installation geometry filter -- no real target can be within 30cm of a
+// ceiling-mounted radar.
 static const float MIN_TARGET_DISTANCE_M = 0.30f;
 
-// Self-healing watchdog -- same thresholds as the 6001B. Generous even
-// against the MS72SF1 datasheet's claimed <=30ms processing cycle (vs. the
-// 6001B's ~100ms): a truly silent link for 90s is always abnormal
-// regardless of which module's cadence is in play.
+// Self-healing watchdog -- same thresholds as the 6001B.
 static const uint32_t WATCHDOG_TIMEOUT_MS = 90000;
 static const uint32_t WATCHDOG_COOLDOWN_MS = 30000;
 
-// AT+ command queue ack timeout -- same value as the 6001B (ported from
-// Devristo's esphome-hlk-ld6001a CommandQueue there too).
+// AT+ command queue ack timeout -- same value as the 6001B.
 static const uint32_t AT_COMMAND_ACK_TIMEOUT_MS = 5000;
 
-// Same reasoning as the 6001B: apply_radar_settings_() enqueues its whole
-// batch in one shot (3 settings + up to 4 zone commands = 7, smaller than
-// the 6001B's 11 since there are fewer confirmed settings for this
-// module), this leaves generous headroom above that for console commands
-// on top.
+// apply_radar_settings_() enqueues 12 commands (AT+STOP, 6 settings, 4 zone
+// bounds, AT+READ), leaving room for console commands on top.
 static const size_t MAX_AT_COMMAND_QUEUE_SIZE = 32;
 
-// No heartbeat frame decoded (see header comment) -- "Etat radar" instead
-// polls AT+READ periodically via the same ack/timeout-gated command queue
-// used for everything else, and shows its raw text response verbatim (no
-// field-by-field parser: the response format is undocumented and reported
-// to vary by firmware version, see PROTOCOL.md). 15s is an arbitrary
-// first-pass choice, not derived from any documented interval -- cheap to
-// retune once real device behavior (response latency, whether it disrupts
-// AT+DEBUG=3 streaming) is observed in Phase 1.
-static const uint32_t AT_READ_POLL_INTERVAL_MS = 15000;
-
-// Rate-limits HA sensor publish_state() calls (NOT the raw
-// /hlk_targets.json feed for the 3D viewer, which stays unthrottled/raw
-// like the 6001B's own "never debounced" philosophy) -- explicit user
-// decision 2026-09-09 (PLAN.md, "Points ouverts", point 4), matching
-// Devristo's own reasoning: this module's claimed <=30ms processing cycle
-// (vs. the 6001B's ~100ms) would otherwise flood Home Assistant's
-// recorder. Value explicitly flagged by the user as "to revisit during
-// testing" -- not a value derived from any measurement yet.
+// HA sensor publish rate limit (not /hlk_targets.json, which stays raw) --
+// explicit user decision 2026-09-09, "to revisit during testing".
 static const uint32_t PUBLISH_THROTTLE_MS = 1000;
 
-// Room geometry -- purely visual/record-keeping, identical to the 6001B
-// (see that project's hlk_ld6001b.h for the full field-by-field rationale,
-// unchanged here since none of it is protocol-specific).
+// AT+READ capture window -- the real reply is ~420 characters; generous
+// headroom, bounded.
+static const size_t READ_CAPTURE_MAX = 2048;
+static const size_t READ_RAW_MAX = 1024;
+
+// Room geometry, purely visual (3D outline/framing), persisted in flash --
+// identical to the 6001B's final RoomConfig, including the two independent
+// display rotations (HLK XY view / Plots top view, 0-3 x 90 deg) and the
+// 5 m / 3 m limits. Fields are only ever APPENDED, never reordered, so a
+// saved blob stays loadable.
 struct RoomConfig {
   float width = 4.0f;
   float length = 4.0f;
@@ -142,46 +128,62 @@ struct RoomConfig {
   float radar_height = 1.5f;
   float wall_offset_m = 2.0f;
   uint8_t mount = 0;
+  uint8_t hlk_view_rotation = 0;
+  uint8_t top_view_rotation = 0;
 };
-static const float ROOM_MAX_WIDTH_LENGTH_M = 4.5f;
-static const float ROOM_MAX_HEIGHT_M = 2.5f;
+static const float ROOM_MAX_WIDTH_LENGTH_M = 5.0f;
+static const float ROOM_MAX_HEIGHT_M = 3.0f;
 
-// Radar-side settings, backed by AT+ commands confirmed in the Hi-Link
-// manual V1.1 section 6 (and cross-checked against Devristo's tested
-// component where the manual itself is ambiguous -- see PROTOCOL.md and
-// PLAN.md "Journal Phase 0"). Persisted here for the same reason as the
-// 6001B: no documented guarantee the radar keeps these across its own
-// power cycle, and our own AT+RESET-based recovery reboots it
-// independently of the ESP32.
-//
-// Deliberately NOT included in this first port (no confirmed
-// range/default in either manual, no user decision taken yet -- see
-// PROTOCOL.md "documentées mais non exposées"): AT+Moving, AT+Static,
-// AT+Exit.
-static const uint8_t RADAR_DPKTH_MIN = 1;
-static const uint8_t RADAR_DPKTH_MAX = 9;
+// Radar-side settings -- the commands this radar firmware actually accepts
+// (see the header comment). Ranges: the documented one where a document
+// covers the command (DPKTHF = the manual's AT+DPKTH, 1-9; RANGE 10-500;
+// HEIGHT 250-320 per the MinewSemi datasheet; HEATIME 10-999), otherwise
+// stated as an assumption. The ESP32 is the source of truth: every setting
+// is re-sent after each (re)init.
+static const uint8_t RADAR_SENS_MIN = 1;  // AT+DPKTHF: manual's AT+DPKTH range
+static const uint8_t RADAR_SENS_MAX = 9;  // AT+DPKTHN: undocumented, same range assumed
 static const uint16_t RADAR_RANGE_CM_MIN = 10;
 static const uint16_t RADAR_RANGE_CM_MAX = 500;
-static const uint16_t RADAR_HEIGHTD_CM_MIN = 50;
-static const uint16_t RADAR_HEIGHTD_CM_MAX = 500;
-// Zone bounds: the module defines its rectangular zone by 4 independent
-// signed offsets from its own origin (not two free corners like the
-// 6001B's WINxRANGE) -- AT+XPosi/AT+YPosi are positive-only, AT+XNega/
-// AT+YNega are negative-only, per the manual's own documented ranges.
+static const uint16_t RADAR_HEIGHT_CM_MIN = 250;  // AT+HEIGHT, MinewSemi datasheet §7
+static const uint16_t RADAR_HEIGHT_CM_MAX = 320;
+static const uint16_t RADAR_HRANGE_CM_MIN = 50;  // AT+HRANGE: undocumented -- the
+static const uint16_t RADAR_HRANGE_CM_MAX = 500;  // manual's AT+HEIGHTD range assumed
+static const uint16_t RADAR_HEATIME_S_MIN = 10;
+static const uint16_t RADAR_HEATIME_S_MAX = 999;
+// Single rectangular detection zone: 4 independent signed offsets from the
+// radar origin, intersected with the AT+RANGE circle (manual §6 diagram).
 static const int16_t RADAR_ZONE_POS_MIN_CM = 20;
 static const int16_t RADAR_ZONE_POS_MAX_CM = 500;
 static const int16_t RADAR_ZONE_NEG_MIN_CM = -500;
 static const int16_t RADAR_ZONE_NEG_MAX_CM = -20;
+// Zone disabled = bounds pushed to the maximum (+-500 cm, accepted on the
+// real module), so only the AT+RANGE circle limits detection -- the radar
+// always applies SOME bounds (+-300 cm stored on arrival), sending nothing
+// would leave that hidden restriction in place.
+static const int16_t RADAR_ZONE_DISABLED_BOUND_CM = 500;
 
 struct RadarSettings {
-  uint8_t sensitivity = 4;     // AT+DPKTH, manual default (larger = less sensitive)
-  uint16_t range_cm = 450;     // AT+RANGE, manual default
-  uint16_t height_d_cm = 300;  // AT+HEIGHTD, manual default
+  uint8_t sens_far = 4;       // AT+DPKTHF (DPKF), larger = less sensitive (manual, AT+DPKTH)
+  uint8_t sens_near = 5;      // AT+DPKTHN (DPKN), value found on arrival
+  uint16_t range_cm = 450;    // AT+RANGE (Range), ground circle radius
+  uint16_t height_cm = 270;   // AT+HEIGHT (Height), installation height
+  uint16_t hrange_cm = 200;   // AT+HRANGE (Hrange), value found on arrival
+  uint16_t heartbeat_s = 60;  // AT+HEATIME (Heart_Time)
   bool zone_enabled = false;
-  int16_t zone_x_neg = -450;  // AT+XNega, manual default (as AT+XNegaD)
-  int16_t zone_x_pos = 450;   // AT+XPosi, manual default (as AT+XPosiD)
-  int16_t zone_y_neg = -450;  // AT+YNega, manual default (as AT+YNegaD)
-  int16_t zone_y_pos = 450;   // AT+YPosi, manual default (as AT+YPosiD)
+  int16_t zone_x_neg = -300;  // AT+XNegaD (XdetectionN) -- radar's own value on arrival
+  int16_t zone_x_pos = 300;   // AT+XPosiD (XdetectionP)
+  int16_t zone_y_neg = -300;  // AT+YNegaD (YdetectionN)
+  int16_t zone_y_pos = 300;   // AT+YPosiD (YdetectionP)
+};
+
+// Values parsed out of the last AT+READ block -- has_* false = key absent
+// from the reply.
+struct RadarLiveRead {
+  bool has_sens_far = false, has_sens_near = false, has_range = false, has_height = false;
+  bool has_hrange = false, has_heartbeat = false, has_zone = false;
+  int sens_far = 0, sens_near = 0, range_cm = 0, height_cm = 0, hrange_cm = 0, heartbeat_s = 0;
+  int zone_x_neg = 0, zone_x_pos = 0, zone_y_neg = 0, zone_y_pos = 0;
+  std::string version;
 };
 
 class HlkLd6001aComponent final : public Component, public uart::UARTDevice {
@@ -209,29 +211,48 @@ class HlkLd6001aComponent final : public Component, public uart::UARTDevice {
 #endif
 
  protected:
-  void process_debug3_frame_(const uint8_t *frame, size_t len);
+  enum class TlvFraming : uint8_t { UNKNOWN, NO_CHECK, WITH_CHECK };
+  enum class TlvVerdict : uint8_t { ACCEPT, WAIT, REJECT };
+
+  void process_tlv_frame_(const uint8_t *frame, uint32_t point_len, uint32_t track_len, size_t people_start);
+  // Same decision rules as testing/radar_protocol_tlv.py::decide() -- keep
+  // the two in sync.
+  TlvVerdict decide_tlv_framing_(size_t length, uint8_t xor_check, size_t &consumed);
   void send_reinit_sequence_();
   void check_watchdog_();
-  void poll_at_read_();
   void start_http_server_();
   static esp_err_t http_handle_root_(httpd_req_t *req);
+  static esp_err_t http_handle_three_js_(httpd_req_t *req);
+  static esp_err_t http_handle_orbit_controls_js_(httpd_req_t *req);
   static esp_err_t http_handle_targets_json_(httpd_req_t *req);
   static esp_err_t http_handle_room_get_(httpd_req_t *req);
   static esp_err_t http_handle_room_post_(httpd_req_t *req);
   std::string room_config_json_() const;
 
+  // Enqueues AT+STOP, every saved setting, then AT+READ; every call site
+  // follows with start_after_settings_queue_drains_() (AT+DEBUG=2/AT+START).
   void apply_radar_settings_();
-  bool pending_apply_radar_settings_ = false;
+  // Set by http_handle_settings_post_ (httpd task); loop() does the real
+  // call -- UART writes must stay on the main task (6001B finding
+  // 2026-09-06: writes from the httpd task never reached the wire).
+  volatile bool pending_apply_radar_settings_ = false;
   std::string radar_settings_json_() const;
   static esp_err_t http_handle_settings_get_(httpd_req_t *req);
   static esp_err_t http_handle_settings_post_(httpd_req_t *req);
+  // Advanced Commands backend, non-blocking (POST queues, the page polls
+  // /at_command_result) -- same design as the 6001B.
   static esp_err_t http_handle_at_command_post_(httpd_req_t *req);
   static esp_err_t http_handle_at_command_result_get_(httpd_req_t *req);
+  // "Redemarrer le radar" button -- same full cycle as the watchdog recovery.
+  // Hands over to loop() through pending_radar_restart_: the 6001B called
+  // send_reinit_sequence_() straight from the httpd task, which writes to
+  // the UART and touches the command queue off the main task.
+  static esp_err_t http_handle_radar_restart_post_(httpd_req_t *req);
+  volatile bool pending_radar_restart_ = false;
 
-  // AT+ command queue -- verbatim same design as the 6001B project
-  // (itself ported from Devristo's esphome-hlk-ld6001a CommandQueue): one
-  // command "in flight" at a time, advanced only on a real AT+OK/AT+ERR
-  // ack or after AT_COMMAND_ACK_TIMEOUT_MS.
+  // AT+ command queue: one command in flight, advanced on a real AT+OK /
+  // AT+ERR / "Save Para Fail" reply (or the AT+READ block) or after
+  // AT_COMMAND_ACK_TIMEOUT_MS.
   struct PendingAtCommand {
     std::string data;  // includes trailing '\n'
     std::function<void(bool ok, const std::string &raw_response)> on_result;
@@ -239,15 +260,23 @@ class HlkLd6001aComponent final : public Component, public uart::UARTDevice {
   void enqueue_at_command_(const std::string &cmd_with_newline,
                             std::function<void(bool ok, const std::string &raw_response)> on_result = nullptr);
   void service_at_command_queue_();
+  void resolve_in_flight_(bool ok, const std::string &raw);
   void start_after_settings_queue_drains_(uint32_t waited_ms);
   void handle_at_response_line_(const std::string &line);
   std::deque<PendingAtCommand> at_command_queue_;
   bool at_command_in_flight_ = false;
   uint32_t at_command_sent_millis_ = 0;
 
-  // Cross-task handoff for http_handle_at_command_post_ -- see the 6001B
-  // project's identical fields for the full rationale (single mailbox,
-  // 409-on-busy backstop for a second tab/session).
+  // AT+READ reply capture (see the header comment) -- active only while an
+  // AT+READ is the in-flight command.
+  void feed_read_capture_(const uint8_t *data, size_t len);
+  void check_read_capture_();
+  void parse_read_response_(const std::string &text);
+  bool read_capture_active_ = false;
+  bool read_capture_prev_a3_ = false;
+  std::string read_capture_;
+
+  // Cross-task handoff for /at_command -- single mailbox, 409 when busy.
   volatile bool http_at_command_done_ = false;
   volatile bool http_at_command_ok_ = false;
   std::string http_at_command_response_;
@@ -257,8 +286,17 @@ class HlkLd6001aComponent final : public Component, public uart::UARTDevice {
   uint32_t last_frame_millis_ = 0;
   uint32_t last_recovery_millis_ = 0;
   uint32_t recovery_count_ = 0;
-  uint32_t last_at_read_poll_millis_ = 0;
   uint32_t last_publish_millis_ = 0;
+
+  // TLV framing state (sticky, re-learned whenever a full decision is
+  // possible -- see decide_tlv_framing_()) and counters for /hlk_targets.json.
+  TlvFraming tlv_framing_ = TlvFraming::UNKNOWN;
+  uint32_t tlv_frame_count_ = 0;
+  uint32_t tlv_rejected_count_ = 0;
+  uint32_t last_point_len_ = 0;
+  bool logged_first_point_frame_ = false;
+  bool logged_first_person_frame_ = false;
+  uint16_t logged_old_frame_types_ = 0;  // bit n = first 55 AA frame of TYPE n already logged
 
   httpd_handle_t http_server_ = nullptr;
   bool http_server_start_attempted_ = false;
@@ -267,17 +305,12 @@ class HlkLd6001aComponent final : public Component, public uart::UARTDevice {
   RoomConfig room_config_;
   ESPPreferenceObject radar_settings_pref_;
   RadarSettings radar_settings_;
-  bool radar_settings_applied_ = false;
 
-  // "Etat radar" ground truth -- raw AT+READ response text, not parsed
-  // field-by-field (see header comment and PROTOCOL.md). live_read_seen_
-  // becomes true after the first successful (ok=true) AT+READ reply;
-  // live_read_millis_ lets the web UI flag a stale/no-longer-responding
-  // radar (see MAINTENANCE.md) instead of showing a frozen old response
-  // forever.
+  // "Etat radar" ground truth -- last successfully captured AT+READ block.
   bool live_read_seen_ = false;
-  std::string live_read_raw_;
   uint32_t live_read_millis_ = 0;
+  std::string live_read_raw_;
+  RadarLiveRead live_read_;
 
   uint8_t latest_num_people_ = 0;
   uint32_t latest_id_[MAX_TARGETS] = {};
@@ -287,6 +320,12 @@ class HlkLd6001aComponent final : public Component, public uart::UARTDevice {
   float latest_vx_[MAX_TARGETS] = {};
   float latest_vy_[MAX_TARGETS] = {};
   float latest_vz_[MAX_TARGETS] = {};
+
+  uint16_t latest_point_count_ = 0;
+  float latest_point_x_[MAX_POINTS] = {};
+  float latest_point_y_[MAX_POINTS] = {};
+  float latest_point_z_[MAX_POINTS] = {};
+  float latest_point_d_[MAX_POINTS] = {};
 
 #ifdef USE_SENSOR
   sensor::Sensor *target_x_sensors_[MAX_TARGETS] = {};

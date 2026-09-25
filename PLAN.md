@@ -370,6 +370,169 @@ après, sur les mêmes broches). Reste à vérifier réellement en Phase 1
 que ce correctif tient sur le matériel 6001A une fois reçu — même
 protocole de vérification que le 6001B.
 
+## Journal Phase 1 (2026-09-25) — matériel reçu
+
+### Matériel en place
+
+XIAO ESP32-S3 **Plus** `28:84:85:8a:be:00` (COM59, flash Puya 16 Mo — la
+même unité que celle des bootloops brownout 6001B du 2026-09-15, et dont
+une image complète existe : `HLK-LD6001B/ESP32S3_Plus/Clone_ESP32S3/
+plus_28848a58abe00_full_flash_16MB_2026-09-21.bin`) câblée au radar
+HLK-LD6001A par l'utilisateur. À l'arrivée, elle portait encore un
+firmware 6001B (UI TI du 2026-09-21, antérieure au nuage de points),
+joignable en 192.168.1.90.
+
+### Observations faites AVANT tout changement (lecture seule)
+
+Le firmware 6001B encore présent envoie sa propre séquence au radar
+(`AT+STOP`, `AT+RESET`, réglages 6001B, `AT+DEBUG=2`, `AT+START`) — ce qui
+a permis d'observer le 6001A en `AT+DEBUG=2` sans rien flasher :
+
+1. **Débit : 115200 confirmé.** Le firmware 6001B (115200) décode des
+   trames TLV réelles du 6001A (`/hlk_targets.json` : 2 cibles, ID
+   persistants 3 et 6, X/Y/Z et vitesses qui évoluent). La mention
+   « 921600 par défaut » de la table `AT+BAUD` du manuel ne correspond pas
+   au module livré.
+2. **Capture de 35 s des octets bruts** (logs `uart_debug` via l'API
+   WiFi, aucune commande envoyée) → 12 251 octets, conservés tels quels
+   dans `testing/fixtures/debug2_rx_2026-09-25.bin`. Sur **349/349
+   trames** : `LENGTH` = taille exacte de la trame, **aucun octet de
+   checksum final** en `DEBUG=2` (l'en-tête suivant commence pile à
+   l'offset `LENGTH`), relation `LENGTH = 24 + POINTLEN + 8 + TRACKLEN`
+   exacte, `TLV1 = 1`, `TLV2 = 2`, compteur `FRAME` continu (+1 à chaque
+   trame, aucune perte), ~10 trames/s.
+3. **Nuage de points présent en `DEBUG=2`** : `POINTLEN` ∈ {0, 25, 50,
+   75, 100}, toujours multiple de 25 → même taille d'enregistrement que le
+   6001B. Décodé avec le layout 6001B : X/Y/Z plausibles (0–4,4 m), D
+   entre 2,0 et 13,3 (plage de la légende couleur constructeur), octet
+   tag ∈ {-5,-1,0,+1}, mais **E ne vaut que 255,0 ou 7,0** (toujours < 2
+   sur le 6001B) → sémantique de E/F différente, non utilisés. Contenu
+   X/Y/Z **pas encore validé contre une vérité terrain** (aucune personne
+   suivie pendant la fenêtre de capture : `TRACKLEN = 0` sur les 349
+   trames).
+4. Cohérent avec le datasheet MS72SF1 §9 (« R&D Mode displays the point
+   cloud, Demo Mode does not ») et le manuel Hi-Link (`DEBUG=2` = mode du
+   logiciel PC, `DEBUG=3` = mode « démonstration », `POINTLEN` « toujours
+   0 »).
+5. **`AT+READ` → `AT+ERR`** quand le radar est en streaming (`DEBUG=2`,
+   `START`) : réponse brute `41 54 2B 45 52 52 0D 0A` (« AT+ERR\r\n »),
+   rien d'autre.
+
+### Vérification du code de Devristo (sources téléchargées ce jour)
+
+- Il envoie bien `AT+XNega=`/`AT+XPosi=`/`AT+YNega=`/`AT+YPosi=` (sans
+  « D »), `AT+DPKTH`, `AT+HEIGHTD`, `AT+Moving`/`AT+Static`/`AT+Exit`
+  (unité 100 ms), UART 115200.
+- **Mais son parseur accepte n'importe quelle ligne `AT+...\r\n` comme
+  accusé, `AT+ERR` compris**, et n'écoute pas `Save Para Fail` (fonction
+  écrite mais absente de la liste des matchers) : son code ne prouve donc
+  PAS que la forme sans « D » est acceptée. Question toujours ouverte, à
+  trancher sur le matériel (voir plus bas).
+- Réponse `AT+READ` attendue selon lui : bloc pseudo-JSON commençant par
+  `{`, clés `PeopleCntSoftVerison`, `RangeRes`, `VelRes`, `TIME`, `PROG`,
+  `Range`, `Sen`, `Heart_Time`, `Debug`, `detectionHeight`,
+  `XboundaryN/P`, `YboundaryN/P`, `Moving target`, `Static target`,
+  `Target exit` (valeurs en secondes, suffixe « s »), fixups propres à
+  certaines versions de firmware (`NOP_1.07-01`).
+- **Conséquence pour notre composant Phase 0** : son sondage `AT+READ`
+  toutes les 15 s ne pouvait jamais afficher les paramètres (seule une
+  ligne `AT+OK`/`AT+ERR` était capturée, jamais le bloc `{...}`) et
+  occupait la file 5 s à chaque fois — supprimé dans le portage.
+
+### Décisions de ce jour
+
+- **Mode d'exploitation : `AT+DEBUG=2`** (au lieu de 3 retenu en
+  Phase 0) — seul mode qui fournit le nuage de points dont la page HLK a
+  besoin, avec les mêmes enregistrements personne. Le parseur accepte les
+  deux cadrages (avec/sans octet de checksum, détection automatique,
+  logique validée d'abord en Python : `testing/radar_protocol_tlv.py` +
+  `test_protocol_tlv.py`, 349 trames réelles + flux `DEBUG=3` synthétique
+  + corruption + texte intercalé + bascules de mode). Revenir à
+  `DEBUG=3` = une constante (`RADAR_OPERATING_DEBUG_MODE`).
+- **Portage complet de l'UI finale du 6001B** (demande utilisateur :
+  « l'ancien site web n'est plus à jour ») — voir PORTAGE-6001B-VERS-
+  6001A.md pour la liste des adaptations.
+
+### Déploiement du nouveau firmware (demande utilisateur : effacer l'ancien soft)
+
+Identité vérifiée avant écriture (`esptool flash-id` : MAC
+`28:84:85:8a:be:00`, flash `85`/`2018` 16 Mo), `esptool erase-flash`
+(7,3 s), flash USB (`Hash of data verified`). Premier boot propre
+(`Boot seems successful`), aucun signe de brownout — alors que cette
+unité précise avait fait des bootloops avec le 6001B le 2026-09-15 et
+qu'aucune mitigation n'a été portée (décision du 2026-09-21 respectée).
+Correctif UART (`UART_NUM_1`) validé : chaque commande envoyée a reçu une
+réponse explicite du radar.
+
+### Découverte : le firmware radar n'accepte pas le jeu de commandes du manuel Hi-Link
+
+`AT+READ` (radar arrêté) renvoie :
+`{ "SoftVerison":"NOP_2.11-20260525-minesemi", "RangeRes":0.055664,
+"VelRes":0.111289, "TIME":100, "PROG":2, "BautRate":115200,
+"Heart_Time":60, "DPKN":5, "DPKF":4, "PointTHV":2, "PointTH":10,
+"FreeTime":20, "FreeTimeNoise":100, "FreeNumNoise":5, "Hrange":200,
+"Height":270, "Range":450, "XdetectionN":-300, "XdetectionP":300,
+"YdetectionN":-300, "YdetectionP":300 }` — firmware MinewSemi daté du
+25/05/2026, clés très différentes de celles vues par Devristo
+(`NOP_1.07`). Premier cycle de configuration (commandes du manuel) :
+`AT+STOP` OK, `AT+RANGE=450` → `AT+OK=450`, `AT+HEATIME=60` →
+`AT+OK=60`, mais **`AT+DPKTH`, `AT+HEIGHTD`, `AT+Moving`, `AT+Static`,
+`AT+Exit` → `AT+ERR`**.
+
+Sondage des noms candidats (radar arrêté, en renvoyant à chaque fois la
+valeur déjà en place, `AT+READ` de contrôle identique) puis **test
+changement → relecture → restauration** pour relier chaque commande à sa
+clé (état final vérifié identique à l'état initial) :
+
+| Commande acceptée | Clé `AT+READ` | Observations |
+|---|---|---|
+| `AT+DPKTHF` | `DPKF` | 5 puis 4 relus ; équivalent du `AT+DPKTH` du manuel |
+| `AT+DPKTHN` | `DPKN` | 6 puis 5 relus ; absente des deux manuels |
+| `AT+RANGE` | `Range` | 440 puis 450 relus |
+| `AT+HEIGHT` | `Height` | 250, 320, 321 acceptés ; 249 appliqué mais sans accusé (timeout) |
+| `AT+HRANGE` | `Hrange` | 210, 280 (> Height) acceptés ; absente des manuels |
+| `AT+HEATIME` | `Heart_Time` | 61 puis 60 relus |
+| `AT+XNegaD` / `XPosiD` / `YNegaD` / `YPosiD` | `XdetectionN/P`, `YdetectionN/P` | ±500 accepté ; **la forme sans « D » répond `AT+ERR`** → question ouverte depuis la Phase 0 tranchée, le manuel avait raison et le code de Devristo tort sur ce firmware |
+
+Refusées (`AT+ERR`) dans toutes les graphies essayées : `AT+DPKTH`,
+`AT+HEIGHTD` (même ≤ `Height`), `AT+Moving`/`Static`/`Exit`,
+`AT+DPKF`/`DPKN`, `AT+FREETIME`/`FreeTime`, `AT+FREETIMENOISE`,
+`AT+FREENUMNOISE`, `AT+POINTTH`/`PointTH`/`POINTTHV`, `AT+XNega` (sans
+D), `AT+XdetectionN`.
+
+**Zone** : le radar applique toujours des bornes (±300 cm trouvés à la
+livraison, valeur du datasheet MinewSemi, pas ±450 du manuel Hi-Link).
+Décision : zone « désactivée » dans l'UI = bornes envoyées au maximum
+(±500 cm), pour que seul le cercle `AT+RANGE` limite réellement la
+détection — ne rien envoyer laisserait une restriction cachée à ±3 m.
+
+Firmware adapté en conséquence (réglages : DPKTHF, DPKTHN, RANGE, HEIGHT,
+HRANGE, HEATIME, zone avec « D »), recompilé sans avertissement, mis à
+jour par OTA : **les six réglages et les bornes de zone relus par
+`AT+READ` sont conformes aux valeurs commandées** ; ~9,4 trames/s,
+cadrage sans checksum détecté, 0 trame rejetée, 0 récupération watchdog.
+
+### Validation utilisateur (2026-09-25)
+
+Interface web et fonctionnement validés par l'utilisateur ; Home Assistant
+OK. Une invite de découverte « HLK-LD6001B plafond (XIAO ESP32-S3 Plus)
+(hlk-ld6001b-xiao-plus) » est apparue dans Home Assistant : vérification
+en mDNS (`_esphomelib._tcp`) et par l'API de chaque carte — le 6001A
+(192.168.1.90, `28:84:85:8a:be:00`) annonce `hlk-ld6001a-xiao` /
+« HLK-LD6001A plafond (XIAO ESP32-S3 Plus) » ; l'invite correspond au
+6001B de production (192.168.1.17, `68:ee:8f:4d:19:88`), sous tension
+sur le réseau. Installation au plafond reportée.
+
+### Incidents de test (artefacts, pas des défauts du firmware)
+
+- L'ESP32 a redémarré une fois (raison « USB peripheral ») juste après
+  l'arrêt de la capture de logs série : la fermeture du port USB a
+  réinitialisé la carte, comme déjà vécu sur le 6001B. Captures
+  suivantes faites via l'API WiFi (aucun effet sur l'USB).
+- Une récupération watchdog (compteur à 1) : les sondages AT ont laissé
+  le radar arrêté plus de 90 s — le mécanisme a relancé le radar comme
+  prévu. Compteur revenu à 0 après la mise à jour OTA.
+
 ## Risques identifiés
 
 - **Débit UART ambigu** (115200 vs 921600 selon la source) — impact
