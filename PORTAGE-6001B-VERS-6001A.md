@@ -39,8 +39,10 @@ export/inspection, bandeau 3 colonnes, données figées).
 - `wifi_ssid()` déprécié (supprimé dans ESPHome 2026.9.0) remplacé par
   `wifi_ssid_to()`.
 
-**Défauts latents du 6001B corrigés ici au passage** (non reportés sur le
-6001B, à décider) :
+**Défauts latents du 6001B corrigés ici au passage** — reportés aussi sur
+le 6001B le 2026-09-25 à la demande de l'utilisateur (Phase 15 de
+`HLK-LD6001B/ESP32S3_Plus/PLAN.md`, dépôt `HLK-6001B` commit `a3fb1b9`),
+vérifiés sur l'unité `68:ee:8f:4d:19:88` :
 1. « Enregistrer les réglages » ne s'active pas quand on modifie seulement
    un champ de la Zone de détection ou la case « Activer », parce que
    `#radar-zones` n'est plus dans `#radar-form` depuis la réorganisation
