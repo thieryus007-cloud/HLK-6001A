@@ -111,6 +111,18 @@ static const size_t MAX_AT_COMMAND_QUEUE_SIZE = 32;
 // explicit user decision 2026-09-09, "to revisit during testing".
 static const uint32_t PUBLISH_THROTTLE_MS = 1000;
 
+// Debounce for the HA target count INCREASES only -- never applied to
+// has_target (presence stays instant) nor to decreases, nor to
+// /hlk_targets.json (raw view). Same constant and logic as the 6001B
+// (TARGET_COUNT_INCREASE_DEBOUNCE_MS in hlk_ld6001b.h): a higher count is
+// published only once it has held unchanged for this long. Side-by-side
+// measurement 2026-09-26 (PLAN.md): the 6001A showed transient extra
+// tracks (~25 s static at ~4 m, ~45 s wandering near the radar) that the
+// 6001B never published; replaying this debounce on the recorded 6001A
+// counts matched the 6001B's published count on 180/180 samples (104/180
+// without it).
+static const uint32_t TARGET_COUNT_INCREASE_DEBOUNCE_MS = 60000;
+
 // AT+READ capture window -- the real reply is ~420 characters; generous
 // headroom, bounded.
 static const size_t READ_CAPTURE_MAX = 2048;
@@ -287,6 +299,11 @@ class HlkLd6001aComponent final : public Component, public uart::UARTDevice {
   uint32_t last_recovery_millis_ = 0;
   uint32_t recovery_count_ = 0;
   uint32_t last_publish_millis_ = 0;
+
+  // Target count debounce state (see TARGET_COUNT_INCREASE_DEBOUNCE_MS).
+  uint8_t published_target_count_ = 0;
+  uint8_t pending_target_count_ = 0;
+  uint32_t pending_target_count_since_ = 0;
 
   // TLV framing state (sticky, re-learned whenever a full decision is
   // possible -- see decide_tlv_framing_()) and counters for /hlk_targets.json.

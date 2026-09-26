@@ -15936,6 +15936,22 @@ void HlkLd6001aComponent::set_target_id_sensor(uint8_t index, sensor::Sensor *s)
 #endif
 
 void HlkLd6001aComponent::setup() {
+  // Brownout protection #1, ported from the 6001B (hlk_ld6001b.cpp setup(),
+  // 2026-09-15) after a real brownout on this hardware (2026-09-26): first
+  // boot after an OTA, radar still streaming from the previous firmware,
+  // reset reason "brownout" at ~44 s -- before safe_mode's 1 min
+  // boot_is_good_after, so the bootloader rolled back to the previous image
+  // (CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE). This component's setup()
+  // (priority DATA, 600) runs before wifi:'s (WIFI, 250): stopping the radar
+  // here keeps its active-scan current from stacking on the WiFi start-up
+  // spike. Fire-and-forget (the ack machinery only runs from loop()); 2 s
+  // for the radar MCU to act on it, same value as the 6001B. Harmless on a
+  // true cold power-on (radar not listening yet). The radar is restarted by
+  // the normal configuration sequence (AT+STOP, settings, AT+READ,
+  // AT+DEBUG=2, AT+START) once WiFi is up -- see loop().
+  send_command(this, "AT+STOP\n");
+  delay(2000);
+
   uint32_t now = millis();
   this->last_frame_millis_ = now;
   this->last_recovery_millis_ = now;
@@ -15952,10 +15968,8 @@ void HlkLd6001aComponent::setup() {
 
   // Radar configuration is deferred to loop(), gated on a confirmed WiFi
   // connection (the YAML's on_boot sends AT+RESET only once WiFi is up --
-  // 6001B brownout lesson). Deliberately NO AT+STOP here, before WiFi
-  // starts: that 6001B brownout mitigation is not ported pre-emptively
-  // (explicit user decision 2026-09-21, PORTAGE-6001B-VERS-6001A.md) -- only
-  // if a real brownout is observed on 6001A hardware.
+  // 6001B brownout lesson; WiFi itself starts 8 s after boot, protection #2
+  // in the YAML).
 }
 
 // TCP_NODELAY on every accepted connection -- 6001B finding 2026-09-12:
@@ -17091,8 +17105,7 @@ void HlkLd6001aComponent::process_tlv_frame_(const uint8_t *frame, uint32_t poin
 #endif
   }
 
-  // Presence/count with the installation geometry filter; no count debounce
-  // here (the 6001B's was for a ghost pattern not yet observed on the 6001A).
+  // Presence/count with the installation geometry filter.
   uint8_t real_people = 0;
   for (uint8_t i = 0; i < this->latest_num_people_; i++) {
     float distance = std::sqrt(this->latest_x_[i] * this->latest_x_[i] + this->latest_y_[i] * this->latest_y_[i] +
@@ -17102,9 +17115,26 @@ void HlkLd6001aComponent::process_tlv_frame_(const uint8_t *frame, uint32_t poin
   }
   real_people += num_people > MAX_TARGETS ? num_people - MAX_TARGETS : 0;
 
+  // Debounce increases only, exactly as the 6001B's process_monitoring_():
+  // a higher count must hold unchanged for TARGET_COUNT_INCREASE_DEBOUNCE_MS
+  // (any change restarts the wait) before it is published; a drop is taken
+  // at once. Evaluated on every frame, published at the throttled rate.
+  if (real_people > this->published_target_count_) {
+    if (real_people != this->pending_target_count_) {
+      this->pending_target_count_ = real_people;
+      this->pending_target_count_since_ = now;
+    }
+    if (now - this->pending_target_count_since_ >= TARGET_COUNT_INCREASE_DEBOUNCE_MS)
+      this->published_target_count_ = real_people;
+  } else {
+    this->published_target_count_ = real_people;
+    this->pending_target_count_ = real_people;
+    this->pending_target_count_since_ = now;
+  }
+
 #ifdef USE_SENSOR
   if (do_publish && this->target_count_sensor_ != nullptr)
-    this->target_count_sensor_->publish_state(real_people);
+    this->target_count_sensor_->publish_state(this->published_target_count_);
 #endif
 #ifdef USE_BINARY_SENSOR
   // Presence is never throttled -- it must never lag behind reality.

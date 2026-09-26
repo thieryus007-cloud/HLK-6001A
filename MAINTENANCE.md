@@ -64,16 +64,29 @@ L'ESP32 est la source de vérité : réglages en NVS, rejoués à chaque
 
 ## Brownout au démarrage WiFi
 
-Même risque que sur le 6001B (pic radar + pic WiFi sur la même
-alimentation). Protection en place : `AT+RESET` attend une connexion WiFi
-confirmée. Les mitigations complémentaires du 6001B Plus ne sont pas
-appliquées (décision explicite, pas de brownout observé sur ce module) :
-si `E BOD` / `RTC_SW_SYS_RST` / `TG1WDT_SYS_RST` en boucle apparaissent
-(ou `Reset Reason` = « Brownout reset » dans Home Assistant), appliquer
-d'abord `AT+STOP` en début de `setup()` + `wifi: enable_on_boot: false`
-avec activation retardée (8 s) depuis `on_boot`, puis vérifier sur des
-cycles d'alimentation réellement froids (USB débranché > 1 min), une
-seule variable à la fois.
+Brownout observé sur cette carte (`Reset Reason` = « brownout »), surtout
+au premier démarrage d'un firmware tout juste installé : ESPHome y sonde
+tous les canaux WiFi, ses données `fast_connect` étant liées au hash de
+configuration. Protections en place :
+
+1. `AT+STOP` en début de `setup()` puis 2 s d'attente, avant le démarrage
+   du WiFi ;
+2. `wifi: enable_on_boot: false`, radio activée 8 s après le démarrage
+   depuis `on_boot` ;
+3. `wifi: output_power: 8.5db` (le pilote rapporte 10 dBm).
+
+S'y ajoute l'attente d'une connexion WiFi confirmée avant `AT+RESET`. Sans
+la protection 3, 3 brownouts sur 3 au premier démarrage d'une image neuve.
+La variante « puissance réduite pendant la connexion seulement »
+(`on_connect`/`on_disconnect`) a été essayée puis abandonnée (PLAN.md,
+2026-09-26).
+
+**Conséquence d'un brownout pendant la première minute après une OTA** :
+l'image n'est pas encore validée par `safe_mode` (`boot_is_good_after:
+1min`), le bootloader revient automatiquement au firmware précédent. Rien
+n'est abîmé, mais la mise à jour n'a pas eu lieu : toujours vérifier la
+date de compilation annoncée par la carte **après** 90 s d'uptime (voir
+Dépannage).
 
 ## Dépannage
 
@@ -87,13 +100,17 @@ seule variable à la fois.
   via l'API WiFi.
 - **Vérifier qu'une commande atteint le fil** : les logs du composant
   affichent `sending queued AT command` puis `AT response received`. Pour
-  voir aussi les octets émis, passer temporairement `uart: debug:
-  direction:` à `BOTH`.
+  voir les octets, ajouter **temporairement** `debug: direction: BOTH`
+  sous `uart: radar_uart` (absent en fonctionnement normal : il recopie
+  chaque octet reçu en hexadécimal, ~25 Ko/s de logs avec un gros nuage
+  de points, ce qui a fortement dégradé le réseau de la carte — ping
+  jusqu'à 1,9 s, OTA de 150–200 s au lieu de 6–10 s).
 - **Compilation « réussie » sans firmware produit** : commande lancée hors
   PowerShell (voir DEPLOYMENT.md).
-- **OTA « successful » sans changement** : vérifier la date `compiled on`
-  au boot (retour automatique à l'ancien firmware si le nouveau n'a pas
-  tenu 60 s) ; après une modification de la page web, `esphome clean` puis
+- **OTA « successful » sans changement** : lire la date de compilation
+  annoncée par la carte (API ESPHome `device_info`) **après 90 s
+  d'uptime**, et `Reset Reason` : « brownout » ou « interrupt watchdog »
+  pendant la première minute = retour automatique au firmware précédent ; après une modification de la page web, `esphome clean` puis
   recompilation, et contrôle du contenu servi (`curl http://<IP>/`).
 - **Advanced Commands répond 409 « busy »** : une autre session a une
   commande en cours.

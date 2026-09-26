@@ -23,6 +23,12 @@ contient l'**ancien firmware HLK-LD6001B** : ne pas l'utiliser pour le
 
 ## Image
 
+> **Plus conforme au firmware en service** : la carte exécute depuis le
+> 2026-09-26 20:57 le build du 2026-09-26 20:55:59 (anti-rebond de
+> `People Count`, protections brownout, sans `uart debug` — PLAN.md). Une
+> nouvelle lecture est à faire dès que la carte est rebranchée en USB.
+> L'image ci-dessous reste valable pour revenir à l'état du 2026-09-25.
+
 **`plus_2884858abe00_hlk-ld6001a_full_flash_16MB_2026-09-26.bin`** —
 16 777 216 octets (`0x000000`–`0x1000000`), SHA-256
 `be416b6c04fdf0063ad470524ba2e44647c2eacb1810919bb43835321de43fda`.

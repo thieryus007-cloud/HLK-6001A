@@ -582,6 +582,180 @@ plus sensible selon le manuel), rayon 500, hauteur 300, balayage 300.
   à l'utilisateur, après validation des réglages (une variable à la
   fois).
 
+### Mesure côte à côte (2026-09-26, radars voisins, 1 personne, 3 min à 1 Hz)
+
+6001A placé à côté du 6001B par l'utilisateur, seule différence de
+positionnement déclarée : le sens de l'axe X. Réglages 6001A relus sur le
+radar : `DPKF 4`, `DPKN 5`, rayon 500, hauteur 300, balayage 200, zone
+désactivée. Enregistrement simultané des deux `/hlk_targets.json`
+(`dual_record.py` / `dual_analyze.py`, 180 paires).
+
+- Présence : identique sur 180/180.
+- Nombre de cibles tel que HA le publierait : 104/180 (le 6001B publie
+  avec son anti-rebond de 60 s, le 6001A brut). Écarts dus à deux cibles
+  transitoires du seul 6001A — ID 7 fixe à ~4 m pendant ~25 s, puis ID 9
+  errant à 0,7–1,8 m pendant ~45 s. En rejouant l'anti-rebond exact du
+  6001B sur la série du 6001A : **180/180**.
+- Axes : Y s'inverse nettement entre les deux repères (résidu 0,17 m
+  contre ~0,6 m sans inversion) ; X non discriminé (peu de déplacement
+  latéral pendant l'enregistrement).
+- Z : celui du 6001A est plus haut que celui du 6001B (moyenne
+  +0,44 m, jusqu'à 2,67 m pour la personne) ; distances au sol plus
+  courtes sur le 6001A. Cohérent avec `AT+HEIGHT=300` supérieur à la
+  hauteur réelle — à tester en réglant la hauteur réelle (attendu : Z du
+  6001A abaissé d'environ 3,00 − H).
+
+### Deuxième mesure côte à côte (même jour, 5 min, avec déplacements)
+
+Réglages des deux unités par l'utilisateur : pièce 4 × 4 × 2,5 m, radar
+au plafond au centre à 2,5 m, portée 4 m (6001B `AT+RANGE=400` ; 6001A
+rayon 400, hauteur 250, balayage 200, `DPKF 4 / DPKN 5`), relus sur les
+deux radars.
+
+- Axes : **X et Y tous deux inversés** entre les repères (B.x = −A.x,
+  B.y = −A.y), tranché pendant la phase de déplacement (résidu 0,21 m
+  contre ≥ 0,36 m pour les autres combinaisons, dont les échanges X/Y) ;
+  même échelle sur Y (pente 1,02, r = 0,99 sur 4,5 m de déplacement).
+  Un demi-tour d'une carte par rapport à l'autre produit exactement ce
+  double changement de signe.
+- Nombre de cibles : 153/300 identiques. Phase de déplacement : 6001B à 4
+  (67 s) puis 3, 6001A à 2-3. Ensuite le 6001B garde 2 pistes aux
+  coordonnées figées au centimètre pendant 211 s, dont une en
+  (0,19 ; −2,81 ; 1,81), hors des limites de la pièce configurée (murs à
+  ±2 m) ; le 6001A suit une piste au même endroit (ID 7) jusqu'à 198 s
+  puis l'abandonne (1 cible contre 2).
+- Anti-rebond rejoué sur cette série : 109/300 (contre 209/300 sans) —
+  il retient le 6001A sous le 6001B dès que son compte baisse. Contredit
+  la conclusion tirée de la première mesure seule : **pas installé**
+  (code compilé, build du 2026-09-26 17:01:55, non flashé, non commité).
+- Z : l'écart moyen 6001A − 6001B reste de +0,42 m pendant la phase de
+  déplacement malgré `AT+HEIGHT` 300 → 250 — l'hypothèse « Z = hauteur
+  réglée − distance » n'est pas confirmée ; sur l'ensemble de la mesure
+  l'appariement multi-cibles rend Z inexploitable (écart-type 0,71 m).
+
+### Vérité terrain et décision (même jour)
+
+L'utilisateur précise : **une seule personne** pendant les deux mesures,
+les cibles multiples venant de ses déplacements (un mouvement de bras
+peut aussi créer une cible). Score « compte publié = 1 » :
+
+| | Mesure 1 (180 s) | Mesure 2 (300 s) |
+|---|---|---|
+| 6001B, firmware actuel (anti-rebond) | 100 % | 0 % (2 pistes pendant 5 min) |
+| 6001A sans anti-rebond | 58 % | 20 % |
+| 6001A avec anti-rebond | 100 % | 59 % |
+| 6001A anti-rebond + zone ±2,0 à ±2,3 m (simulée en post-filtre) | 100 % | 100 % |
+
+Face à la réalité l'anti-rebond améliore le 6001A dans les deux mesures
+(le recul précédent venait de la comparaison au 6001B, lui-même faux en
+mesure 2). **Installé** par OTA (build 2026-09-26 17:01:55, identité
+vérifiée ARP + API) ; réglages relus conformes après redémarrage. Un
+filtre de pièce centré à ±2 m écarterait la personne réelle sur le 6001B
+(placée à 2,2–2,6 m en mesure 1) : pas de zone sûre côté 6001B d'après
+ces données.
+
+**Brownout observé** sur le 6001A au premier démarrage suivant cet OTA :
+redémarrage spontané après ~44 s, raison de reset `brownout` (capteur
+Reset Reason), démarrage suivant stable (3 min de surveillance, uptime
+continu). Condition posée par l'utilisateur le 2026-09-21 pour porter
+les protections du 6001B (`AT+STOP` dans `setup()`, WiFi activé en
+différé) : un brownout observé — remplie ; portage proposé, non fait.
+
+Anti-rebond non encore mis à l'épreuve sur la carte : aucune hausse du
+compte brut pendant les 3 min de surveillance HA/brut. À vérifier par
+une sortie/retour de la pièce (attendu : compte HA à 0 aussitôt, retour
+à 1 ~60 s après le retour ; présence immédiate dans les deux sens). Un
+relevé à ~20 s d'uptime après le brownout montrait déjà `People Count 1`,
+inattendu avec l'anti-rebond — non expliqué, c'est ce test qui tranchera.
+
+**Tests sortie/retour (même jour)** — surveillance simultanée, une
+connexion API par carte + `/hlk_targets.json` à 1 Hz :
+
+- 6001A : `People Count` suit le compte brut en ~1 s à chaque hausse
+  (1→2→3→4) — **l'anti-rebond ne fonctionne pas sur la carte**. Présence
+  correcte : OFF pendant les ~20 s d'absence, ON au retour.
+- 6001B : l'anti-rebond fonctionne (HA reste à 2 pendant 20 s de brut à
+  4, puis 21 s à 3 ; à 1 pendant plusieurs périodes de brut à 2). Mais
+  **pièce vide non détectée** : pendant l'absence, brut 5→2, jamais 0,
+  présence restée ON.
+- Vérifié sans trouver la cause côté 6001A : source, copie compilée,
+  code machine (`process_tlv_frame_` : comparaisons, constante 59 999,
+  `now` = `millis()`), seul publieur de `People Count`, seules écritures
+  des membres de l'anti-rebond = constructeur + cette fonction. Le
+  comportement observé correspond à un `pending_target_count_since_`
+  qui ne retient pas sa valeur d'une trame à l'autre — non prouvé ;
+  prochaine étape proposée : build de diagnostic journalisant les
+  valeurs internes (flash soumis à accord).
+
+**Cause réelle (même soir) : l'anti-rebond n'a jamais tourné.** La carte
+exécutait le build du 2026-09-25 18:05:02 : le brownout survenu ~44 s
+après l'OTA de 17:05, avant la validation de l'image par `safe_mode`
+(`boot_is_good_after: 1min`, `USE_OTA_ROLLBACK`,
+`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y`), a fait revenir le bootloader à
+l'image précédente. La version n'avait été vérifiée qu'avant ce
+redémarrage. Tous les tests d'anti-rebond de l'après-midi portaient donc
+sur un firmware qui ne le contenait pas.
+
+Suite, OTA successifs (identité vérifiée ARP + API avant chacun) :
+
+| Build | Contenu | Premier démarrage |
+|---|---|---|
+| 19:24:54 | anti-rebond + protections #1/#2 + sans `uart debug` | brownout → retour 18:05:02 |
+| 19:31:56 | idem + `output_power: 8.5db` | OK, validé (reset « Reboot request from esphome.ota ») |
+| 19:40:49 | 19:24 sans `output_power` (écarté par l'utilisateur, liaison saine côté AP : −40 dBm, 0 % de retransmissions, 72,2 Mbps) | brownout avant que l'API soit joignable (~10 s, démarrage WiFi) → retour 19:31:56 |
+
+Les démarrages de secours (image déjà exécutée) n'ont jamais fait de
+brownout (3/3). Mécanisme identifié dans ESPHome
+(`wifi_component.cpp::start()`) : les données `fast_connect` (BSSID +
+canal) sont enregistrées sous une clé dérivée de
+`App.get_config_version_hash()`, qui change à chaque build — au premier
+démarrage d'une nouvelle image, pas de BSSID connu, connexion par sondage
+de tous les canaux au lieu d'une association directe.
+
+**Réseau de la carte fortement dégradé** tant que tournait le build
+18:05:02 (ping 0,2–1,9 s, 25–50 % de pertes, page web 0,7–5,8 s, OTA
+152–207 s au lieu de ~6–10 s), liaison saine côté point d'accès. Seul
+contenu des logs : `[D][uart_debug]` (recopie hexadécimale de chaque
+octet reçu du radar, volume proportionnel au nuage de points, passé de
+~19 à 56–73 points). Depuis les builds sans `uart debug` : ping moyen
+19–26 ms, page web 24–111 ms, OTA 10 s.
+
+**Option A (choix utilisateur) — build 19:59:27** : `output_power: 8.5db`
+au démarrage radio + `on_connect` → 20 dBm / `on_disconnect` → 8,5 dBm
+(`esphome/wifi_tx_power.h`), capteur diagnostic « WiFi TX Power ».
+Résultats : premier démarrage brownout (retour 19:31), second essai OK
+(validé) ; puissance relue **10 dBm** une fois connecté — le passage à
+20 dBm n'a pas pris effet (log émis avant toute connexion API, cause non
+vue) ; puis **reset « interrupt watchdog »** ~4 min après le démarrage,
+jamais vu sur les builds précédents (seul code nouveau : commutation de
+puissance + capteur interrogeant le pilote WiFi toutes les 30 s ; cause
+non établie, pas de trace de crash sans liaison USB). Bilan brownout au
+premier démarrage d'une image neuve : pleine puissance 3/3, puissance
+réduite 1/3 ; démarrages d'une image déjà exécutée 0/4. Le 6001B a fait
+un brownout au démarrage à froid après repositionnement par
+l'utilisateur, malgré ses protections.
+
+**Anti-rebond vérifié sur la carte (build 19:59:27)** — test
+sortie/retour : compte brut 1→2→3→2, `People Count` n'a publié 2 que
+61 s après que le brut s'est stabilisé à 2 ; même comportement que le
+6001B (HA à 1 pendant que son brut passait à 2, 4, 3). Pendant l'absence
+de l'utilisateur (radars repositionnés), **aucun des deux radars n'a vu
+la pièce vide** (brut 1, présence ON en continu).
+
+**Décision utilisateur : retour à la configuration du build 19:31**
+(puissance fixe 8,5 dBm, sans commutation ni capteur de puissance,
+`wifi_tx_power.h` supprimé). Recompilé : `config_hash=0xe10cef7a`,
+identique au 19:31 comme prévu (données `fast_connect` déjà présentes →
+association directe). Build 2026-09-26 20:55:59 installé par OTA
+(identité vérifiée), validé : 99 s d'uptime, reset « Reboot request from
+esphome.ota », 13 commandes radar acquittées, 0 trame rejetée, ping
+~13 ms, page web 20–44 ms.
+
+En service sur le 6001A : anti-rebond de `People Count` (60 s, vérifié),
+protections brownout #1/#2/#3, plus de `uart debug`. Image de référence
+`Clone_ESP32S3/` **à refaire** (firmware changé depuis la lecture du
+matin ; carte non branchée en USB).
+
 ## Risques identifiés
 
 - **Débit UART ambigu** (115200 vs 921600 selon la source) — impact

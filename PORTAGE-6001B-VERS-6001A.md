@@ -296,6 +296,14 @@ connecté, comme le reste de la Phase 0 — vérifié aujourd'hui.
 
 ## Mitigation brownout WiFi du 6001B Plus — décision finale : ne PAS porter préventivement
 
+> **Mise à jour 2026-09-26** : condition remplie — brownouts réels
+> observés sur le 6001A (premier démarrage après OTA). Les trois
+> protections sont désormais en place sur le 6001A (`AT+STOP` dans
+> `setup()`, `enable_on_boot: false` + 8 s, `output_power: 8.5db`), la
+> troisième s'étant avérée nécessaire sur cette carte. Détail :
+> PLAN.md (journal 2026-09-26), MAINTENANCE.md. Le texte ci-dessous
+> reste l'historique de la décision de 2026-09-21.
+
 **Mise à jour du 2026-09-21, après-midi** : la question "faut-il porter
 la mitigation brownout WiFi du 6001B Plus vers le 6001A ?" a été testée
 et tranchée le jour même sur le 6001B lui-même, pas seulement discutée.

@@ -167,8 +167,10 @@ sur `AT+READ`, pas sur un heartbeat.
 
 ## Séquence de configuration
 
-1. `on_boot` (YAML) : attente d'une connexion WiFi confirmée (30 s max),
-   2 s, puis `AT+RESET`.
+0. `setup()` du composant (avant celui du WiFi) : `AT+STOP` puis 2 s
+   d'attente — le radar ne consomme plus pendant le démarrage radio.
+1. `on_boot` (YAML) : 8 s, activation du WiFi (`enable_on_boot: false`),
+   attente d'une connexion confirmée (30 s max), 2 s, puis `AT+RESET`.
 2. Composant (`loop()`) : 5 s après la connexion WiFi (secours : 32 s après
    le boot), `apply_radar_settings_()` met en file, chacune attendant son
    accusé réel (`AT+OK`/`AT+ERR`/`Save Para Fail`, sinon abandon après 5 s) :
@@ -182,9 +184,18 @@ sans trame, 30 s minimum entre deux déclenchements) et par le bouton
 « Redémarrer le radar ». Un enregistrement des réglages rejoue les étapes
 2 et 3. Durée observée : ~1,4 s, 12 accusés `AT+OK` sur 12.
 
-Pas de `AT+STOP` dans `setup()` ni de `wifi: enable_on_boot: false` :
-mitigations brownout du 6001B non appliquées par décision explicite, à
-n'ajouter qu'en réaction à un brownout observé (MAINTENANCE.md).
+Étapes 0 et 1 et `wifi: output_power: 8.5db` : protections brownout,
+voir MAINTENANCE.md.
+
+## Publication vers Home Assistant
+
+- `Presence` : immédiate, à chaque trame.
+- `People Count` : une hausse n'est publiée qu'après 60 s sans changement
+  (tout changement relance l'attente), une baisse aussitôt — même règle
+  que le 6001B (`TARGET_COUNT_INCREASE_DEBOUNCE_MS`). Au démarrage, la
+  valeur part de 0 : une personne déjà présente n'apparaît qu'après 60 s.
+- Cibles (X/Y/Z, Vx/Vy/Vz, ID) : au plus une fois par seconde.
+- La page web (`/hlk_targets.json`) montre toujours le compte brut.
 
 ## API HTTP du composant (serveur embarqué, port 80)
 

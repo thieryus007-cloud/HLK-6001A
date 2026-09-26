@@ -96,4 +96,8 @@ API.
    `Presence`, `People Count`, `Target 1..6` (X/Y/Z, Vx/Vy/Vz, ID),
    `Radar Recovery Count`, `Reset Reason`, `Uptime`, `Heap Free`,
    `Loop Time`. Les cibles sont publiées au plus une fois par seconde ;
-   `Presence` est immédiate.
+   `Presence` est immédiate ; `People Count` ne publie une hausse qu'après
+   60 s sans changement (PROTOCOL.md).
+7. Après toute OTA : date de compilation annoncée par la carte relue
+   **après 90 s d'uptime** et `Reset Reason` différent de « brownout »
+   (sinon retour automatique au firmware précédent, MAINTENANCE.md).

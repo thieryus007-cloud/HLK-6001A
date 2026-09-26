@@ -11,13 +11,20 @@ esphome:
   # hlk_ld6001a.cpp::loop() pour la suite de la sequence (AT+STOP, reglages,
   # AT+READ, puis AT+DEBUG=2 et AT+START).
   #
-  # Volontairement PAS de AT+STOP dans setup() ni de wifi enable_on_boot:
-  # false/delai (mitigations brownout du 6001B Plus) : decision explicite de
-  # l'utilisateur du 2026-09-21, a n'appliquer qu'en reaction a un brownout
-  # reellement observe sur le 6001A (PORTAGE-6001B-VERS-6001A.md).
+  # Protections brownout du 6001B Plus portees le 2026-09-26, en reaction a
+  # un brownout reellement observe sur cette carte (condition posee par
+  # l'utilisateur le 2026-09-21) : premier demarrage apres une mise a jour
+  # OTA, reset "brownout" a ~44 s, donc avant la validation de l'image par
+  # safe_mode (1 min) -> retour automatique a l'image precedente.
+  # (1) AT+STOP dans hlk_ld6001a.cpp setup(), avant le demarrage du WiFi ;
+  # (2) WiFi non demarre automatiquement (wifi: enable_on_boot: false),
+  # active ici apres 8 s. Meme valeurs que le 6001B (PLAN.md HLK-LD6001B
+  # Phases 2 et 11, 3 cycles a froid propres).
   on_boot:
     priority: -100
     then:
+      - delay: 8s
+      - wifi.enable:
       - wait_until:
           condition:
             wifi.connected:
@@ -69,6 +76,22 @@ wifi:
   fast_connect: true
   enable_btm: true
   enable_rrm: true
+  # Brownout protection #2 (6001B, 2026-09-15): the radio is not started
+  # during setup(); on_boot starts it explicitly after 8 s, once the radar
+  # has been stopped (AT+STOP in hlk_ld6001a.cpp setup()).
+  enable_on_boot: false
+  # Protection brownout #3 : puissance d'emission fixee a 8,5 dBm (le
+  # pilote rapporte 10 dBm pour cette consigne). Decision utilisateur du
+  # 2026-09-26 apres essais (PLAN.md) : seule configuration sans aucune
+  # panne ce jour-la -- premier demarrage apres OTA, demarrage a froid,
+  # fonctionnement continu. Pleine puissance : 3 brownouts sur 3 au premier
+  # demarrage d'une image neuve (ESPHome sonde alors tous les canaux, ses
+  # donnees fast_connect etant liees au hash de configuration). Variante
+  # "reduite pendant la connexion seulement" (on_connect/on_disconnect)
+  # abandonnee : passage a 20 dBm sans effet, un brownout sur deux, et un
+  # reset "interrupt watchdog" non explique. Liaison saine cote point
+  # d'acces (-40 dBm, 0 % de retransmissions, 72,2 Mbps).
+  output_power: 8.5db
   ap:
     ssid: "hlk-ld6001a-xiao-fallback"
 
@@ -120,10 +143,15 @@ uart:
     baud_rate: 115200
     parity: NONE
     stop_bits: 1
-    debug:
-      # RX only -- passer a BOTH temporairement pour verifier qu'une
-      # commande AT+ atteint reellement le fil (voir MAINTENANCE.md).
-      direction: RX
+    # Pas de "debug:" en fonctionnement normal (retire le 2026-09-26) : il
+    # recopie chaque octet recu en hexadecimal dans les logs (~3 caracteres
+    # par octet, soit ~25 Ko/s de texte avec un nuage de 60-70 points a
+    # 5 trames/s), formates en continu et pousses a tout client de logs.
+    # Observe avec un reseau fortement degrade sur la carte (ping 0,2-1,5 s,
+    # 25-50 % de pertes, page web 1-6 s). Pour diagnostiquer temporairement
+    # qu'une commande AT+ atteint le fil (MAINTENANCE.md), rajouter :
+    #   debug:
+    #     direction: BOTH
 
 hlk_ld6001a:
   id: radar
