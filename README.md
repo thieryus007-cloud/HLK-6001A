@@ -11,10 +11,10 @@ module (firmware radar `NOP_2.11-20260525-minesemi`) — voir PROTOCOL.md.
 séquence de configuration (12 commandes acquittées, réglages relus
 conformes par `AT+READ`), décodage des trames et page web vérifiés sur le
 matériel ; interface et intégration Home Assistant validées par
-l'utilisateur. Restent à faire : voir « Suite » dans
-PORTAGE-6001B-VERS-6001A.md (installation au plafond, validation du nuage
-de points contre une vérité terrain, stabilité sur plusieurs heures, image
-de référence).
+l'utilisateur. Image de référence de la flash : `Clone_ESP32S3/`. Restent
+à faire : voir « Suite » dans PORTAGE-6001B-VERS-6001A.md (installation au
+plafond, validation du nuage de points contre une vérité terrain,
+stabilité sur plusieurs heures).
 
 ## Interface web
 

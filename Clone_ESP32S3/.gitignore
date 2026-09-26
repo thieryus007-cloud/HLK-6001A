@@ -1,0 +1,5 @@
+# Full-flash images (16 MB each) stay local, like HLK-LD6001B's
+# Clone_ESP32S3/: the application inside them carries the WiFi credentials
+# compiled in from secrets.yaml, and they are reproducible from source.
+# Only README.md is tracked.
+*_full_flash_*.bin

@@ -533,6 +533,55 @@ sur le réseau. Installation au plafond reportée.
   le radar arrêté plus de 90 s — le mécanisme a relancé le radar comme
   prévu. Compteur revenu à 0 après la mise à jour OTA.
 
+## Journal 2026-09-26 — images de référence
+
+Demande utilisateur : « les images doivent être conformes à ce qui est en
+place ». Lectures seules (`esptool read-flash`), identité vérifiée par
+`flash-id` avant chacune.
+
+- **6001A** (`28:84:85:8a:be:00`, COM59) :
+  `Clone_ESP32S3/plus_2884858abe00_hlk-ld6001a_full_flash_16MB_2026-09-26.bin`,
+  lue en 130,1 s avec esptool 5.3.1 (pas de bug SLIP cette fois).
+  Application active `app1` (otadata `seq=2`) identique octet pour octet
+  au build du 2026-09-25 18:05:02, date annoncée par la carte via l'API.
+  `app0` garde le build du premier flash USB. NVS : réglages
+  `sensFar 4 / sensNear 4`, rayon 500, hauteur 300, balayage 300 (valeurs
+  changées depuis la page entre 15 h 20 et la lecture, relues sur le radar
+  au redémarrage). Carte de retour en ligne (`uptimeS` 12, 0 trame
+  rejetée).
+- **6001B** (`68:ee:8f:4d:19:88`, COM64) : sixième sauvegarde, firmware
+  Phase 15, documentée dans
+  `HLK-LD6001B/ESP32S3_Plus/Clone_ESP32S3/README-plus.md` (dépôt
+  `HLK-6001B`, commit `fab3ba6`), avec une note : l'image du 2026-09-21 de
+  la carte `28:84:85:8a:be:00` contient l'ancien firmware 6001B.
+
+### Comparaison de détection 6001A / 6001B (même instant, 15 h 20)
+
+Même `room_config` sur les deux (5 × 5 × 2,5 m, plafond). 6001B : 2 cibles ;
+6001A : 6 cibles, avec `DPKF 1 / DPKN 1` (le bas de l'échelle, c.-à-d. le
+plus sensible selon le manuel), rayon 500, hauteur 300, balayage 300.
+
+- Le 6001B tourne entièrement sur ses valeurs d'usine (`AT+SENS=2`,
+  `AT+RANGE=600`, `AT+TIME=100`, `AT+MONTIME=1`, `AT+HEATIME=60`, aucune
+  porte/rideau) ; sa hauteur de montage interne n'est ni réglable ni
+  lisible (`AT+HEIGHT`/`AT+READ` → `AT+ERR`, journal HLK-LD6001B du
+  2026-09-06). Aucune correspondance documentée entre `AT+SENS` (1-19) et
+  `AT+DPKTHF`/`DPKTHN` (1-9).
+- Réglages proposés pour le 6001A : valeurs d'usine pour la sensibilité
+  (`DPKTHF 4`, `DPKTHN 5`) et la hauteur de balayage (200), géométrie
+  réelle pour le reste (`AT+HEIGHT` = hauteur de pose, rayon ≥ 354 cm
+  pour couvrir une pièce 5 × 5 depuis son centre, zone désactivée).
+  Attendu : le nombre de cibles du 6001A rejoint celui du 6001B dans la
+  même scène ; sinon ajuster `DPKTHF` d'un cran à la fois, puis
+  `HRANGE`/`HEIGHT` un par un.
+- Différences de code qu'aucun réglage ne supprime : le 6001B publie son
+  nombre de cibles à partir des trames `55 AA` avec un anti-rebond de
+  60 s sur les hausses (`TARGET_COUNT_INCREASE_DEBOUNCE_MS`) ; le 6001A
+  publie la liste TLV sans anti-rebond. Positions HA au pas de 10 cm sur
+  le 6001B, au centimètre sur le 6001A. Portage de l'anti-rebond proposé
+  à l'utilisateur, après validation des réglages (une variable à la
+  fois).
+
 ## Risques identifiés
 
 - **Débit UART ambigu** (115200 vs 921600 selon la source) — impact

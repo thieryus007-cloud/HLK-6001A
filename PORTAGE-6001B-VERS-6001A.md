@@ -86,8 +86,7 @@ plafond reportée par l'utilisateur.
    variation à établir par essai si un réglage s'avère nécessaire.
 5. **Stabilité sur plusieurs heures** (compteur de récupérations, reset
    reason) avant usage sans surveillance.
-6. **Image de référence** (`esptool read-flash`, 16 Mo) et commit/push du
-   dépôt `HLK-6001A`, sur demande de l'utilisateur.
+6. ~~Image de référence~~ — faite (2026-09-26), `Clone_ESP32S3/`.
 
 
 Ce document complète PLAN.md (qui couvre le portage protocolaire initial,
