@@ -752,9 +752,19 @@ esphome.ota », 13 commandes radar acquittées, 0 trame rejetée, ping
 ~13 ms, page web 20–44 ms.
 
 En service sur le 6001A : anti-rebond de `People Count` (60 s, vérifié),
-protections brownout #1/#2/#3, plus de `uart debug`. Image de référence
-`Clone_ESP32S3/` **à refaire** (firmware changé depuis la lecture du
-matin ; carte non branchée en USB).
+protections brownout #1/#2/#3, plus de `uart debug`.
+
+**2026-09-27** : les deux cartes rebranchées par l'utilisateur sur le PC
+via un hub USB et un prolongateur — accès confirmé (6001A COM59, 6001B
+COM64, identités lues dans le numéro de série USB puis par `flash-id`).
+Démarrage à froid du 6001A au rebranchement : `power-on event`, bon
+build, radar reconfiguré (2ᵉ démarrage à froid propre de cette
+configuration). Images de référence refaites et vérifiées (application
+active identique octet pour octet au build en service) :
+`Clone_ESP32S3/plus_2884858abe00_hlk-ld6001a_full_flash_16MB_2026-09-27.bin`
+et, côté 6001B, 7ᵉ sauvegarde (`README-plus.md`). Redémarrage après
+lecture : 6001A propre (« USB peripheral »), **6001B brownout** (2ᵉ sur
+ses 2 derniers démarrages, protections #1/#2 seulement).
 
 ## Risques identifiés
 

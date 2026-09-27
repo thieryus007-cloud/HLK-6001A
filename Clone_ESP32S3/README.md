@@ -23,28 +23,29 @@ contient l'**ancien firmware HLK-LD6001B** : ne pas l'utiliser pour le
 
 ## Image
 
-> **Plus conforme au firmware en service** : la carte exécute depuis le
-> 2026-09-26 20:57 le build du 2026-09-26 20:55:59 (anti-rebond de
-> `People Count`, protections brownout, sans `uart debug` — PLAN.md). Une
-> nouvelle lecture est à faire dès que la carte est rebranchée en USB.
-> L'image ci-dessous reste valable pour revenir à l'état du 2026-09-25.
-
-**`plus_2884858abe00_hlk-ld6001a_full_flash_16MB_2026-09-26.bin`** —
+**`plus_2884858abe00_hlk-ld6001a_full_flash_16MB_2026-09-27.bin`** —
 16 777 216 octets (`0x000000`–`0x1000000`), SHA-256
-`be416b6c04fdf0063ad470524ba2e44647c2eacb1810919bb43835321de43fda`.
+`654ffe43a285db1de62de0efe9f7c885286ea01c233eeed73e34374f294ca9fb`.
+Lue par USB à travers un hub et un prolongateur (COM59), identité
+vérifiée par `flash-id` juste avant.
 
 Contenu vérifié contre le build qui tourne sur la carte :
 
 | Zone | Contenu |
 |---|---|
-| `otadata` (0x9000) | deux entrées valides, `seq=2` la plus récente → application active = `app1` |
-| `app1` (0x7D0000) | **identique octet pour octet** au `firmware.ota.bin` du build `hlk-ld6001a-xiao` du 2026-09-25 18:05:02 (ESPHome 2026.8.0) — la date de compilation annoncée par la carte via l'API |
-| `app0` (0x10000) | build antérieur du même jour (premier flash USB), inactif |
-| `nvs` (0xF90000) | préférences en service : réglages radar `sensFar 4`, `sensNear 4`, rayon 500 cm, hauteur 300 cm, hauteur de balayage 300 cm, heartbeat 60 s, zone désactivée ; `room_config` 5,00 × 5,00 × 2,50 m, montage plafond |
+| `otadata` (0x9000) | deux entrées valides, `seq=5` la plus récente → application active = `app0` |
+| `app0` (0x10000) | **identique octet pour octet** au `firmware.ota.bin` du build `hlk-ld6001a-xiao` du 2026-09-26 20:55:59 (`config_hash 0xe10cef7a`, ESPHome 2026.8.0) — la date de compilation annoncée par la carte via l'API : anti-rebond de `People Count`, protections brownout (`AT+STOP` au démarrage, WiFi activé après 8 s, `output_power: 8.5db`), sans `uart debug` |
+| `app1` (0x7D0000) | build antérieur, inactif |
+| `nvs` (0xF90000) | préférences en service : réglages radar `sensFar 3`, `sensNear 5`, rayon 400 cm, hauteur 250 cm, hauteur de balayage 200 cm, heartbeat 60 s, zone désactivée ; `room_config` 4,00 × 4,00 × 2,50 m, montage plafond |
 
 Les réglages radar et la configuration de la pièce sont modifiables depuis
-la page web : l'image reflète leur valeur au 2026-09-26. Après tout
+la page web : l'image reflète leur valeur au 2026-09-27. Après tout
 changement durable, en refaire une.
+
+Image précédente, conservée pour revenir à l'état du 2026-09-25 (firmware
+sans anti-rebond ni protections brownout) :
+`plus_2884858abe00_hlk-ld6001a_full_flash_16MB_2026-09-26.bin` (SHA-256
+`be416b6c…de43fda`).
 
 ## Restaurer
 
@@ -53,7 +54,7 @@ attendues ci-dessus) :
 
 ```powershell
 python -m esptool --port <COM> flash-id
-python -m esptool --port <COM> write-flash 0x0 plus_2884858abe00_hlk-ld6001a_full_flash_16MB_2026-09-26.bin
+python -m esptool --port <COM> write-flash 0x0 plus_2884858abe00_hlk-ld6001a_full_flash_16MB_2026-09-27.bin
 ```
 
 Écrit aussi la NVS : la carte redémarre avec ses réglages et sa
