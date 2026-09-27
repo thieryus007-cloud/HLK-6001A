@@ -15,6 +15,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
+#include <new>
 #include <string>
 
 namespace esphome::hlk_ld6001a {
@@ -13091,6 +13093,13 @@ static const char VIEWER_HTML[] = R"HTML(<!DOCTYPE html>
     pointer-events:none;
   }
 
+  /* Historique de detection (2026-09-27), panneau #aux-panel-history. */
+  .history-tab.active { background:var(--accent); color:#ffffff; border-color:var(--accent); }
+  #history-window {
+    background:rgba(0,0,0,0.03); color:var(--text); border:1px solid var(--panel-border);
+    border-radius:5px; padding:2px 4px; font-size:11px;
+  }
+
   @media (max-width: 900px) {
     .ti-plots-main { grid-template-columns:1fr; }
   }
@@ -13536,17 +13545,25 @@ static const char VIEWER_HTML[] = R"HTML(<!DOCTYPE html>
         <canvas id="canvas-front"></canvas>
       </div>
     </div>
-    <div class="ti-panel aux-view-panel" id="aux-panel-side">
+    <!-- Historique de detection (2026-09-27) -- remplace la Vue de profil.
+         Donnees tenues par l'ESP32 (/history.json, un echantillon toutes les
+         10 s, 3 h en memoire, perdues au redemarrage), pas par le
+         navigateur : un rechargement de la page ne perd rien. -->
+    <div class="ti-panel aux-view-panel" id="aux-panel-history">
       <div class="aux-view-label">
-        <span>Vue de profil</span>
+        <span>Historique</span>
         <div class="view-toolbar">
-          <button id="side-zoom-out-btn" class="view-tool-btn view-tool-btn-narrow" type="button" title="Zoom arriere">&minus;</button>
-          <button id="side-zoom-in-btn" class="view-tool-btn view-tool-btn-narrow" type="button" title="Zoom avant">&plus;</button>
-          <button id="side-fit-btn" class="view-tool-btn" type="button" title="Reinitialiser le zoom">&#10530; Ajuster</button>
+          <button id="history-tab-curves" class="view-tool-btn history-tab active" type="button" title="Nombre de cibles (brut, max sur 10 s), People Count publie vers Home Assistant, et presence, dans le temps">Courbes</button>
+          <button id="history-tab-map" class="view-tool-btn history-tab" type="button" title="Carte de chaleur des positions des cibles sur la periode : une cible fantome fixe apparait comme un point chaud la ou personne ne se tient">Carte</button>
+          <select id="history-window" title="Periode affichee">
+            <option value="3600">1 h</option>
+            <option value="10800" selected>3 h</option>
+          </select>
         </div>
       </div>
       <div class="aux-view-canvas-wrap">
-        <canvas id="canvas-side"></canvas>
+        <canvas id="canvas-history"></canvas>
+        <span class="view-scale-label" id="history-info"></span>
       </div>
     </div>
   </div>
@@ -13845,7 +13862,6 @@ function auxViewSize(wrapEl) {
 }
 const topWrap = document.querySelector('#aux-panel-top .aux-view-canvas-wrap');
 const frontWrap = document.querySelector('#aux-panel-front .aux-view-canvas-wrap');
-const sideWrap = document.querySelector('#aux-panel-side .aux-view-canvas-wrap');
 const topCamera = new THREE.OrthographicCamera(-2, 2, 2, -2, 0.1, 100);
 // Rotation par pas de 90 deg (2026-09-22, demande explicite) -- INDEPENDANTE
 // de celle du Nuage de points -- XY (page HLK, voir makeHlk2DView) : deux
@@ -13872,18 +13888,10 @@ topRenderer.setSize(auxViewSize(topWrap).w, auxViewSize(topWrap).h, false);
 // orthographic frustum's left/right/top/bottom) is recomputed in
 // updateAuxCameras() from this same FOV plus the current room size.
 const AUX_FOV_DEG = 40;
-const sideCamera = new THREE.PerspectiveCamera(AUX_FOV_DEG, auxViewSize(sideWrap).w / auxViewSize(sideWrap).h, 0.1, 100);
-sideCamera.up.set(0, 1, 0);
-sideCamera.layers.enable(1);
-const sideRenderer = new THREE.WebGLRenderer({canvas: document.getElementById('canvas-side'), antialias: true});
-sideRenderer.setPixelRatio(window.devicePixelRatio);
-sideRenderer.setSize(auxViewSize(sideWrap).w, auxViewSize(sideWrap).h, false);
 
-// Third fixed view, looking along the scene's Z axis (perpendicular to
-// sideCamera's line of sight) -- with topCamera and sideCamera, completes
-// a standard CAD-style three-view set (dessus/face/profil), each showing
-// a different pair of axes so between the three, all of X/Y/Z appear at
-// least twice.
+// Second fixed view, looking along the scene's Z axis. (The third one, a
+// profile view along X, was replaced on 2026-09-27 by the detection
+// history panel -- see "Historique de detection" further down.)
 const frontCamera = new THREE.PerspectiveCamera(AUX_FOV_DEG, auxViewSize(frontWrap).w / auxViewSize(frontWrap).h, 0.1, 100);
 frontCamera.up.set(0, 1, 0);
 frontCamera.layers.enable(1);
@@ -13899,15 +13907,13 @@ frontRenderer.setSize(auxViewSize(frontWrap).w, auxViewSize(frontWrap).h, false)
 function layoutAuxViews() {
   const t = auxViewSize(topWrap);
   topRenderer.setSize(t.w, t.h, false);
-  const s = auxViewSize(sideWrap);
-  sideCamera.aspect = s.w / s.h;
-  sideCamera.updateProjectionMatrix();
-  sideRenderer.setSize(s.w, s.h, false);
   const f = auxViewSize(frontWrap);
   frontCamera.aspect = f.w / f.h;
   frontCamera.updateProjectionMatrix();
   frontRenderer.setSize(f.w, f.h, false);
   updateAuxCameras();
+  if (typeof drawHistory === 'function')
+    drawHistory();
 }
 window.addEventListener('resize', layoutAuxViews);
 
@@ -13918,7 +13924,7 @@ window.addEventListener('resize', layoutAuxViews);
 // (comme le zoom des vues 2D, §5 du plan -- decision par defaut) : locaux
 // a la session, remis a 1 par le bouton "Ajuster" de chaque vue.
 const AUX_ZOOM_MIN = 0.2, AUX_ZOOM_MAX = 4;
-let auxZoom = {top: 1, side: 1, front: 1};
+let auxZoom = {top: 1, front: 1};
 function auxZoomBy(view, factor) {
   auxZoom[view] = Math.min(AUX_ZOOM_MAX, Math.max(AUX_ZOOM_MIN, auxZoom[view] * factor));
   updateAuxCameras();
@@ -13951,26 +13957,18 @@ function updateAuxCameras() {
   topCamera.lookAt(cx, cy, cz);
   topCamera.updateProjectionMatrix();
 
-  // Side and Front: perspective, not orthographic -- the distance from
-  // target that frames the room (equivalent to an orthographic frustum's
-  // half-width) is derived from AUX_FOV_DEG: at distance d, a camera with
-  // vertical FOV f sees a half-height of d*tan(f/2) at the target plane,
-  // so solving for d from a desired half-height gives the same "fit the
-  // room with padding" framing orthographic used, just perspective now.
-  // Le zoom (auxZoom.side/front) multiplie cette DISTANCE -- plus loin =
-  // dezoome, exactement comme topHalf pour la camera orthographique.
+  // Front: perspective, not orthographic -- the distance from target that
+  // frames the room (equivalent to an orthographic frustum's half-width)
+  // is derived from AUX_FOV_DEG: at distance d, a camera with vertical FOV
+  // f sees a half-height of d*tan(f/2) at the target plane, so solving for
+  // d from a desired half-height gives the same "fit the room with
+  // padding" framing orthographic used, just perspective now. Le zoom
+  // (auxZoom.front) multiplie cette DISTANCE -- plus loin = dezoome,
+  // exactement comme topHalf pour la camera orthographique.
   const halfFovRad = (AUX_FOV_DEG / 2) * Math.PI / 180;
 
-  // Side: looking along the scene's X axis, framing height (Y) vs depth
-  // (Z) -- a profile/elevation view.
-  const sideHalf = Math.max(h, l) * 0.65;
-  const sideDist = (sideHalf / Math.tan(halfFovRad)) * auxZoom.side;
-  sideCamera.position.set(cx + sideDist, cy, cz);
-  sideCamera.lookAt(cx, cy, cz);
-  sideCamera.updateProjectionMatrix();
-
   // Front: looking along the scene's Z axis, framing height (Y) vs width
-  // (X) -- the perpendicular elevation to sideCamera.
+  // (X) -- an elevation view.
   const frontHalf = Math.max(h, w) * 0.65;
   const frontDist = (frontHalf / Math.tan(halfFovRad)) * auxZoom.front;
   frontCamera.position.set(cx, cy, cz + frontDist);
@@ -14654,7 +14652,6 @@ function animate() {
   renderer.render(scene, camera);
   topRenderer.render(scene, topCamera);
   frontRenderer.render(scene, frontCamera);
-  sideRenderer.render(scene, sideCamera);
 }
 animate();
 
@@ -15082,9 +15079,6 @@ document.getElementById('top-fit-btn').addEventListener('click', () => auxZoomRe
 document.getElementById('front-zoom-out-btn').addEventListener('click', () => auxZoomBy('front', 1.25));
 document.getElementById('front-zoom-in-btn').addEventListener('click', () => auxZoomBy('front', 0.8));
 document.getElementById('front-fit-btn').addEventListener('click', () => auxZoomReset('front'));
-document.getElementById('side-zoom-out-btn').addEventListener('click', () => auxZoomBy('side', 1.25));
-document.getElementById('side-zoom-in-btn').addEventListener('click', () => auxZoomBy('side', 0.8));
-document.getElementById('side-fit-btn').addEventListener('click', () => auxZoomReset('side'));
 
 // "Recentrer" (§2.3) : la vue orbitale principale n'a aucun moyen de
 // revenir a un etat sain apres une manipulation malheureuse sans recharger
@@ -15142,6 +15136,367 @@ document.getElementById('room-mount').addEventListener('change', (e) => {
 });
 loadRoomConfig();
 
+// ---------------------------------------------------------------------------
+// Historique de detection (2026-09-27) -- panneau #aux-panel-history de la
+// page Plots (a la place de l'ancienne Vue de profil). Source :
+// /history.json, tampon de 3 h tenu par l'ESP32 (un echantillon toutes les
+// 10 s : nombre de cibles brut max/min, People Count publie, % de trames
+// avec presence, positions des cibles en fin d'intervalle). Charge quand la
+// page Plots s'affiche puis toutes les 30 s tant qu'elle est visible --
+// jamais sonde a 1 Hz (risque d'epuisement des sockets, voir le C++).
+// ---------------------------------------------------------------------------
+let historyData = null;
+let historyFetchedAt = 0;
+let historyMode = 'curves';
+let historyFetchInFlight = false;
+
+async function fetchHistory() {
+  if (historyFetchInFlight)
+    return;
+  historyFetchInFlight = true;
+  try {
+    const res = await fetch('/history.json', {cache: 'no-store'});
+    if (res.ok) {
+      historyData = await res.json();
+      historyFetchedAt = Date.now();
+      drawHistory();
+    }
+  } catch (e) {
+    // Hors ligne : le dernier historique reste affiche.
+  } finally {
+    historyFetchInFlight = false;
+  }
+}
+
+function historyWindowS() {
+  const v = parseInt(document.getElementById('history-window').value, 10);
+  return v > 0 ? v : 10800;
+}
+
+// Echantillons de la periode choisie, avec leurs bornes en temps navigateur :
+// le plus recent s'est termine ageS secondes avant la reception.
+function historySamplesInWindow() {
+  const d = historyData;
+  if (!d || !d.n)
+    return [];
+  const intervalMs = (d.intervalS || 10) * 1000;
+  const newestEnd = historyFetchedAt - (d.ageS || 0) * 1000;
+  const from = Date.now() - historyWindowS() * 1000;
+  const out = [];
+  for (let i = 0; i < d.n; i++) {
+    const end = newestEnd - (d.n - 1 - i) * intervalMs;
+    if (end <= from)
+      continue;
+    out.push({start: end - intervalMs, end, rawMax: d.rawMax[i], rawMin: d.rawMin[i], pub: d.pub[i],
+              pres: d.pres[i], pos: (d.pos && d.pos[i]) || []});
+  }
+  return out;
+}
+
+function historyCanvas() {
+  const canvas = document.getElementById('canvas-history');
+  const wrap = canvas && canvas.parentElement;
+  if (!canvas || !wrap)
+    return null;
+  const w = wrap.clientWidth, h = wrap.clientHeight;
+  if (w < 2 || h < 2)
+    return null;  // page Plots non affichee (display:none)
+  const dpr = window.devicePixelRatio || 1;
+  const wantW = Math.round(w * dpr), wantH = Math.round(h * dpr);
+  if (canvas.width !== wantW || canvas.height !== wantH) {
+    canvas.width = wantW;
+    canvas.height = wantH;
+  }
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, w, h);
+  return {ctx, w, h};
+}
+
+function historyMessage(c, text) {
+  c.ctx.fillStyle = '#5b6b7a';
+  c.ctx.font = '12px system-ui, sans-serif';
+  c.ctx.textAlign = 'center';
+  c.ctx.textBaseline = 'middle';
+  c.ctx.fillText(text, c.w / 2, c.h / 2);
+}
+
+function formatHistoryDuration(s) {
+  if (s < 60)
+    return Math.round(s) + ' s';
+  if (s < 3600)
+    return Math.round(s / 60) + ' min';
+  return (s / 3600).toFixed(1).replace('.', ',') + ' h';
+}
+
+function drawHistory() {
+  const c = historyCanvas();
+  if (!c)
+    return;
+  const info = document.getElementById('history-info');
+  if (!historyData) {
+    info.textContent = '';
+    historyMessage(c, 'Chargement de l\'historique...');
+    return;
+  }
+  const samples = historySamplesInWindow();
+  if (!samples.length) {
+    info.textContent = '';
+    historyMessage(c, 'Pas encore de donnees (un point toutes les 10 s)');
+    return;
+  }
+  if (historyMode === 'map')
+    drawHistoryMap(c, samples, info);
+  else
+    drawHistoryCurves(c, samples, info);
+}
+
+// Courbes : zone bleu clair = nombre de cibles brut maximal sur 10 s, bleu
+// fonce = minimal, trait orange = People Count publie vers Home Assistant
+// (avec sa temporisation de 60 s), bande du bas = presence (vert franc :
+// presence sur au moins la moitie des trames, vert pale : par moments,
+// gris clair : absence, gris fonce : aucune trame radar).
+function drawHistoryCurves(c, samples, info) {
+  const {ctx, w, h} = c;
+  const padL = 26, padR = 10, padT = 24, padB = 30, bandH = 9, gap = 5;
+  const plotW = w - padL - padR, plotH = h - padT - padB - bandH - gap;
+  if (plotW < 40 || plotH < 30)
+    return;
+  const winS = historyWindowS();
+  const tEnd = Date.now(), tStart = tEnd - winS * 1000;
+  const xOf = t => padL + Math.min(Math.max((t - tStart) / (tEnd - tStart), 0), 1) * plotW;
+  let maxY = 3;
+  for (const s of samples) {
+    if (s.rawMax > maxY) maxY = s.rawMax;
+    if (s.pub > maxY) maxY = s.pub;
+  }
+  const yOf = v => padT + plotH - (v / maxY) * plotH;
+
+  ctx.font = '10px system-ui, sans-serif';
+  ctx.lineWidth = 1;
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'middle';
+  for (let v = 0; v <= maxY; v++) {
+    const y = Math.round(yOf(v)) + 0.5;
+    ctx.strokeStyle = '#e3e8ec';
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(padL + plotW, y); ctx.stroke();
+    ctx.fillStyle = '#5b6b7a';
+    ctx.fillText(String(v), padL - 5, y);
+  }
+  const tickS = winS <= 3600 ? 900 : 1800;
+  const bandY = padT + plotH + gap;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  for (let k = 0; k * tickS <= winS; k++) {
+    const x = Math.round(xOf(tEnd - k * tickS * 1000)) + 0.5;
+    ctx.strokeStyle = '#eef1f3';
+    ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, padT + plotH); ctx.stroke();
+    const m = k * tickS / 60;
+    const label = k === 0 ? 'maintenant' : '-' + (m >= 60 ? (m / 60) + ' h' : m + ' min');
+    ctx.fillStyle = '#5b6b7a';
+    ctx.textAlign = k === 0 ? 'right' : 'center';
+    ctx.fillText(label, k === 0 ? padL + plotW : x, bandY + bandH + 4);
+  }
+
+  const span = s => {
+    const x0 = xOf(s.start), x1 = xOf(s.end);
+    return {x0, wpx: Math.max(x1 - x0, 1)};
+  };
+  ctx.fillStyle = 'rgba(0,99,107,0.22)';
+  for (const s of samples) {
+    if (s.rawMax <= 0) continue;
+    const {x0, wpx} = span(s);
+    const y = yOf(s.rawMax);
+    ctx.fillRect(x0, y, wpx, padT + plotH - y);
+  }
+  ctx.fillStyle = 'rgba(0,99,107,0.55)';
+  for (const s of samples) {
+    if (s.rawMin <= 0) continue;
+    const {x0, wpx} = span(s);
+    const y = yOf(s.rawMin);
+    ctx.fillRect(x0, y, wpx, padT + plotH - y);
+  }
+  ctx.strokeStyle = '#c8720a';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  let started = false;
+  for (const s of samples) {
+    const x0 = xOf(s.start), x1 = xOf(s.end), y = yOf(s.pub);
+    if (!started) { ctx.moveTo(x0, y); started = true; } else { ctx.lineTo(x0, y); }
+    ctx.lineTo(x1, y);
+  }
+  ctx.stroke();
+  ctx.lineWidth = 1;
+
+  let presentS = 0, knownS = 0, maxRaw = 0, extra = 0;
+  const intervalS = historyData.intervalS || 10;
+  for (const s of samples) {
+    const {x0, wpx} = span(s);
+    let color;
+    if (s.pres < 0) {
+      color = '#9aa4ac';
+    } else {
+      knownS += intervalS;
+      presentS += intervalS * s.pres / 100;
+      if (s.rawMax > maxRaw) maxRaw = s.rawMax;
+      if (s.rawMax > s.pub) extra++;
+      color = s.pres >= 50 ? '#0a8f4a' : (s.pres > 0 ? 'rgba(10,143,74,0.40)' : '#e3e8ec');
+    }
+    ctx.fillStyle = color;
+    ctx.fillRect(x0, bandY, wpx, bandH);
+  }
+
+  // Legende, en haut a gauche.
+  const legend = [['rgba(0,99,107,0.22)', 'brut max'], ['rgba(0,99,107,0.55)', 'brut min'],
+                  ['#c8720a', 'People Count'], ['#0a8f4a', 'presence']];
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  let lx = padL;
+  for (const [color, text] of legend) {
+    ctx.fillStyle = color;
+    ctx.fillRect(lx, 7, 10, 8);
+    ctx.fillStyle = '#16232c';
+    ctx.fillText(text, lx + 13, 11);
+    lx += 13 + ctx.measureText(text).width + 12;
+  }
+  info.textContent = knownS
+      ? 'presence ' + Math.round(100 * presentS / knownS) + ' % - brut max ' + maxRaw +
+        (extra ? ' - ' + formatHistoryDuration(extra * intervalS) + ' avec cibles filtrees' : '')
+      : 'aucune trame radar sur la periode';
+}
+
+function historyHeatColor(f) {  // f dans ]0, 1] : jaune pale -> rouge
+  const g = Math.round(225 - 190 * f), b = Math.round(110 * (1 - f));
+  return 'rgba(230,' + g + ',' + b + ',' + (0.35 + 0.6 * f).toFixed(2) + ')';
+}
+
+// Carte : cumul des positions des cibles (une par intervalle de 10 s et par
+// cible) sur des cases de 20 cm, meme repere et meme rotation que le Nuage
+// de points -- XY de la page HLK (X a droite, Y en haut, radar au centre).
+// Une cible fantome fixe ressort comme un point chaud la ou personne ne se
+// tient -- de quoi placer une zone d'exclusion au bon endroit.
+function drawHistoryMap(c, samples, info) {
+  const {ctx, w, h} = c;
+  const cell = 0.2;
+  const R = Math.max(roomConfig.width || 4, roomConfig.length || 4) / 2 + 0.6;
+  const nCells = Math.ceil(2 * R / cell);
+  const grid = new Float32Array(nCells * nCells);
+  const sumX = new Float32Array(nCells * nCells), sumY = new Float32Array(nCells * nCells);
+  let maxV = 0, total = 0, maxIdx = -1;
+  for (const s of samples) {
+    const pos = s.pos;
+    for (let j = 0; j + 1 < pos.length; j += 2) {
+      const x = pos[j] / 10, y = pos[j + 1] / 10;
+      // +1e-6 : positions en decimetres pile sur une limite de case (3,8 / 0,2
+      // = 18,9999... en flottant) -- sans cette marge, rangees une case trop bas.
+      const ix = Math.floor((x + R) / cell + 1e-6), iy = Math.floor((y + R) / cell + 1e-6);
+      if (ix < 0 || iy < 0 || ix >= nCells || iy >= nCells)
+        continue;
+      const idx = iy * nCells + ix;
+      const v = ++grid[idx];
+      sumX[idx] += x;
+      sumY[idx] += y;
+      total++;
+      if (v > maxV) { maxV = v; maxIdx = idx; }
+    }
+  }
+  const pad = 24;
+  const size = Math.min(w - 2 * pad, h - 2 * pad);
+  if (size < 40)
+    return;
+  const ox = (w - size) / 2, oy = (h - size) / 2, cxp = ox + size / 2, cyp = oy + size / 2;
+  const scale = size / (2 * R);
+  const toPx = (x, y) => ({px: ox + (x + R) * scale, py: oy + (R - y) * scale});
+  const rotDeg = ((roomConfig.hlkViewRotation || 0) % 4) * 90;
+  const rad = rotDeg * Math.PI / 180;
+  const rotPt = (px, py) => ({
+    px: cxp + (px - cxp) * Math.cos(rad) - (py - cyp) * Math.sin(rad),
+    py: cyp + (px - cxp) * Math.sin(rad) + (py - cyp) * Math.cos(rad),
+  });
+
+  ctx.save();
+  ctx.translate(cxp, cyp);
+  ctx.rotate(rad);
+  ctx.translate(-cxp, -cyp);
+  ctx.fillStyle = '#f6f8f9';
+  ctx.fillRect(ox, oy, size, size);
+  ctx.strokeStyle = '#e3e8ec';
+  for (let m = Math.ceil(-R); m <= Math.floor(R); m++) {
+    const a = toPx(m, -R), b = toPx(m, R), cc = toPx(-R, m), d = toPx(R, m);
+    ctx.beginPath(); ctx.moveTo(a.px, a.py); ctx.lineTo(b.px, b.py); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(cc.px, cc.py); ctx.lineTo(d.px, d.py); ctx.stroke();
+  }
+  if (maxV > 0) {
+    for (let iy = 0; iy < nCells; iy++) {
+      for (let ix = 0; ix < nCells; ix++) {
+        const v = grid[iy * nCells + ix];
+        if (!v)
+          continue;
+        ctx.fillStyle = historyHeatColor(Math.sqrt(v / maxV));
+        const p = toPx(-R + ix * cell, -R + (iy + 1) * cell);
+        ctx.fillRect(p.px, p.py, cell * scale + 0.5, cell * scale + 0.5);
+      }
+    }
+  }
+  if ((roomConfig.mount | 0) === 0 && roomConfig.width > 0 && roomConfig.length > 0) {
+    const a = toPx(-roomConfig.width / 2, roomConfig.length / 2);
+    ctx.strokeStyle = '#16232c';
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(a.px, a.py, roomConfig.width * scale, roomConfig.length * scale);
+    ctx.lineWidth = 1;
+  }
+  const o = toPx(0, 0);
+  ctx.fillStyle = '#cc0000';
+  ctx.beginPath(); ctx.arc(o.px, o.py, 4, 0, 2 * Math.PI); ctx.fill();
+  ctx.restore();
+
+  // Libelles d'axes, toujours droits (position tournee, texte non tourne).
+  ctx.font = 'bold 11px system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  const xl = toPx(R - 0.25, 0), yl = toPx(0, R - 0.25);
+  const xr = rotPt(xl.px, xl.py), yr = rotPt(yl.px, yl.py);
+  ctx.fillStyle = '#c62828';
+  ctx.fillText('X', xr.px, xr.py);
+  ctx.fillStyle = '#0a8f4a';
+  ctx.fillText('Y', yr.px, yr.py);
+
+  const intervalS = historyData.intervalS || 10;
+  if (!total) {
+    info.textContent = 'aucune cible sur la periode';
+    return;
+  }
+  // Position moyenne des cibles de la case la plus chaude (pas le centre de
+  // la case) -- la valeur a reporter dans une zone d'exclusion.
+  const hotX = (sumX[maxIdx] / maxV).toFixed(1).replace('.', ',');
+  const hotY = (sumY[maxIdx] / maxV).toFixed(1).replace('.', ',');
+  info.textContent = 'point le plus chaud : ' + formatHistoryDuration(maxV * intervalS) +
+      ' en X ' + hotX + ' / Y ' + hotY + ' m';
+}
+
+function setHistoryMode(mode) {
+  historyMode = mode;
+  document.getElementById('history-tab-curves').classList.toggle('active', mode === 'curves');
+  document.getElementById('history-tab-map').classList.toggle('active', mode === 'map');
+  drawHistory();
+}
+document.getElementById('history-tab-curves').addEventListener('click', () => setHistoryMode('curves'));
+document.getElementById('history-tab-map').addEventListener('click', () => setHistoryMode('map'));
+document.getElementById('history-window').addEventListener('change', drawHistory);
+// Redessin toutes les 10 s (l'axe du temps avance entre deux chargements),
+// chargement toutes les 30 s -- seulement quand la page Plots est affichee.
+let historyTicks = 0;
+setInterval(() => {
+  if (!document.getElementById('page-plots').classList.contains('active'))
+    return;
+  historyTicks++;
+  if (historyTicks % 3 === 0)
+    fetchHistory();
+  else
+    drawHistory();
+}, 10000);
+
 // Pages: HLK / Plots / Configure. Configure holds all setup+tuning UI
 // (Setup Details, Scene Selection, Zone de detection, Real-Time Tuning,
 // Advanced Commands) ; the "Status" info moved to the top red bar
@@ -15161,6 +15516,7 @@ function setPage(name) {
   if (name === 'plots' && typeof layoutMainView === 'function') {
     layoutMainView();
     layoutAuxViews();
+    fetchHistory();
   }
   // Meme raison que ci-dessus pour #canvas-hlk (display:none tant que la
   // page n'est pas active) -- redessine tout de suite avec les dernieres
@@ -15987,9 +16343,9 @@ void HlkLd6001aComponent::start_http_server_() {
   // hit twice on the 6001B).
   config.lru_purge_enable = true;
   config.open_fn = http_open_fn_;
-  // 11 routes below; the default max_uri_handlers (8) would make the extra
-  // registrations fail silently.
-  config.max_uri_handlers = 12;
+  // 12 routes below; the default max_uri_handlers (8) would make the extra
+  // registrations fail silently. Two spare slots.
+  config.max_uri_handlers = 14;
   if (httpd_start(&this->http_server_, &config) != ESP_OK) {
     ESP_LOGE(TAG, "failed to start the web UI HTTP server");
     return;
@@ -16012,6 +16368,7 @@ void HlkLd6001aComponent::start_http_server_() {
       {"/at_command", HTTP_POST, HlkLd6001aComponent::http_handle_at_command_post_},
       {"/at_command_result", HTTP_GET, HlkLd6001aComponent::http_handle_at_command_result_get_},
       {"/radar_restart", HTTP_POST, HlkLd6001aComponent::http_handle_radar_restart_post_},
+      {"/history.json", HTTP_GET, HlkLd6001aComponent::http_handle_history_json_},
   };
   for (const auto &route : ROUTES) {
     httpd_uri_t uri = {};
@@ -16822,6 +17179,8 @@ HlkLd6001aComponent::TlvVerdict HlkLd6001aComponent::decide_tlv_framing_(size_t 
 }
 
 void HlkLd6001aComponent::loop() {
+  this->history_tick_(millis());
+
   // Deferred from setup(): httpd_start() needs the network stack (6001B
   // finding 2026-09-04: calling it at DATA-priority setup() crashed every boot).
   bool network_ready = network::is_connected();
@@ -17114,6 +17473,7 @@ void HlkLd6001aComponent::process_tlv_frame_(const uint8_t *frame, uint32_t poin
       real_people++;
   }
   real_people += num_people > MAX_TARGETS ? num_people - MAX_TARGETS : 0;
+  this->history_accumulate_(real_people);
 
   // Debounce increases only, exactly as the 6001B's process_monitoring_():
   // a higher count must hold unchanged for TARGET_COUNT_INCREASE_DEBOUNCE_MS
@@ -17143,6 +17503,187 @@ void HlkLd6001aComponent::process_tlv_frame_(const uint8_t *frame, uint32_t poin
 #endif
   if (do_publish)
     this->last_publish_millis_ = now;
+}
+
+// ---------------------------------------------------------------------------
+// Detection history (Plots page, 2026-09-27) -- see HistorySample.
+// ---------------------------------------------------------------------------
+
+void HlkLd6001aComponent::history_accumulate_(uint8_t real_people) {
+  if (this->history_acc_frames_ == 0) {
+    this->history_acc_max_ = real_people;
+    this->history_acc_min_ = real_people;
+  } else {
+    this->history_acc_max_ = std::max(this->history_acc_max_, real_people);
+    this->history_acc_min_ = std::min(this->history_acc_min_, real_people);
+  }
+  if (this->history_acc_frames_ < UINT16_MAX) {
+    this->history_acc_frames_++;
+    if (real_people > 0)
+      this->history_acc_present_++;
+  }
+}
+
+static int8_t history_decimetres_(float metres) {
+  if (!std::isfinite(metres))
+    return 0;
+  long dm = std::lround(metres * 10.0f);
+  if (dm > 127)
+    dm = 127;
+  if (dm < -127)
+    dm = -127;
+  return static_cast<int8_t>(dm);
+}
+
+void HlkLd6001aComponent::history_tick_(uint32_t now) {
+  if (!this->history_started_) {
+    this->history_started_ = true;
+    this->history_interval_start_ = now;
+    return;
+  }
+  const uint32_t elapsed = now - this->history_interval_start_;
+  if (elapsed < HISTORY_INTERVAL_MS)
+    return;
+  // Intervals that ended since the last call: normally one; several after a
+  // long loop() stall (an OTA transfer blocks it) -- the extra ones are
+  // stored as "no data" so the time axis of the curves stays right.
+  const uint32_t due = elapsed / HISTORY_INTERVAL_MS;
+  const uint32_t to_store = std::min<uint32_t>(due, HISTORY_LEN);
+
+  HistorySample sample{};
+  if (this->history_acc_frames_ == 0) {
+    sample.raw_max = HISTORY_NO_DATA;
+    sample.raw_min = HISTORY_NO_DATA;
+    sample.presence_pct = HISTORY_NO_DATA;
+  } else {
+    sample.raw_max = std::min<uint8_t>(this->history_acc_max_, HISTORY_NO_DATA - 1);
+    sample.raw_min = std::min<uint8_t>(this->history_acc_min_, HISTORY_NO_DATA - 1);
+    sample.presence_pct = static_cast<uint8_t>(
+        (static_cast<uint32_t>(this->history_acc_present_) * 100u + this->history_acc_frames_ / 2u) /
+        this->history_acc_frames_);
+    // Positions at the end of the interval, same geometry filter as the count.
+    const uint8_t shown = std::min<uint8_t>(this->latest_num_people_, MAX_TARGETS);
+    for (uint8_t i = 0; i < shown; i++) {
+      const float x = this->latest_x_[i], y = this->latest_y_[i], z = this->latest_z_[i];
+      if (std::sqrt(x * x + y * y + z * z) < MIN_TARGET_DISTANCE_M)
+        continue;
+      sample.pos_x[sample.n_pos] = history_decimetres_(x);
+      sample.pos_y[sample.n_pos] = history_decimetres_(y);
+      sample.n_pos++;
+    }
+  }
+  sample.published = this->published_target_count_;
+
+  HistorySample empty{};
+  empty.raw_max = HISTORY_NO_DATA;
+  empty.raw_min = HISTORY_NO_DATA;
+  empty.presence_pct = HISTORY_NO_DATA;
+  empty.published = this->published_target_count_;
+
+  this->history_interval_start_ += due * HISTORY_INTERVAL_MS;
+  {
+    std::lock_guard<std::mutex> lock(this->history_mutex_);
+    for (uint32_t k = 0; k < to_store; k++) {
+      this->history_[this->history_head_] = (k == 0) ? sample : empty;
+      this->history_head_ = static_cast<uint16_t>((this->history_head_ + 1) % HISTORY_LEN);
+      if (this->history_count_ < HISTORY_LEN)
+        this->history_count_++;
+      this->history_seq_++;
+    }
+    // End of the newest stored interval, for the page's time axis.
+    this->history_last_write_millis_ = this->history_interval_start_;
+  }
+  this->history_acc_frames_ = 0;
+  this->history_acc_present_ = 0;
+}
+
+// GET /history.json -- oldest first:
+//   {"intervalS":10,"n":N,"seq":S,"ageS":A,
+//    "rawMax":[..],"rawMin":[..],"pub":[..],"pres":[..],"pos":[[x,y,..],..]}
+// -1 = no radar frame during that interval; positions in decimetres.
+// Streamed in chunks from a heap snapshot (the httpd task has a 4 KB stack);
+// ~60 KB when the 3 h buffer is full. Fetched on demand by the Plots page
+// (on display, then every 30 s while visible), never polled at 1 Hz.
+esp_err_t HlkLd6001aComponent::http_handle_history_json_(httpd_req_t *req) {
+  auto *self = static_cast<HlkLd6001aComponent *>(req->user_ctx);
+  std::unique_ptr<HistorySample[]> snap(new (std::nothrow) HistorySample[HISTORY_LEN]);
+  if (!snap) {
+    httpd_resp_set_status(req, "503 Service Unavailable");
+    httpd_resp_send(req, "{\"error\":\"no memory\"}", HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+  }
+  uint16_t n;
+  uint32_t seq, last_end;
+  {
+    std::lock_guard<std::mutex> lock(self->history_mutex_);
+    n = self->history_count_;
+    seq = self->history_seq_;
+    last_end = self->history_last_write_millis_;
+    const uint16_t oldest = static_cast<uint16_t>((self->history_head_ + HISTORY_LEN - n) % HISTORY_LEN);
+    for (uint16_t i = 0; i < n; i++)
+      snap[i] = self->history_[(oldest + i) % HISTORY_LEN];
+  }
+  const float age_s = n > 0 ? static_cast<float>(millis() - last_end) / 1000.0f : 0.0f;
+
+  httpd_resp_set_type(req, "application/json");
+  httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+  std::string out;
+  out.reserve(2048);
+  bool ok = true;
+  auto flush = [&](bool force) {
+    if (!ok || (!force && out.size() < 1536))
+      return;
+    if (!out.empty() && httpd_resp_send_chunk(req, out.data(), out.size()) != ESP_OK)
+      ok = false;
+    out.clear();
+  };
+  char head[112];  // worst case ~70 characters
+  snprintf(head, sizeof(head), "{\"intervalS\":%u,\"n\":%u,\"seq\":%lu,\"ageS\":%.1f",
+           static_cast<unsigned>(HISTORY_INTERVAL_MS / 1000), static_cast<unsigned>(n),
+           static_cast<unsigned long>(seq), age_s);
+  out += head;
+  char num[24];  // worst case ",-127,-127" / "255"
+  auto put_array = [&](const char *key, uint8_t HistorySample::*field) {
+    out += ",\"";
+    out += key;
+    out += "\":[";
+    for (uint16_t i = 0; i < n && ok; i++) {
+      const uint8_t v = snap[i].*field;
+      if (i > 0)
+        out += ',';
+      if (v == HISTORY_NO_DATA && field != &HistorySample::published) {
+        out += "-1";
+      } else {
+        snprintf(num, sizeof(num), "%u", static_cast<unsigned>(v));
+        out += num;
+      }
+      flush(false);
+    }
+    out += ']';
+  };
+  put_array("rawMax", &HistorySample::raw_max);
+  put_array("rawMin", &HistorySample::raw_min);
+  put_array("pub", &HistorySample::published);
+  put_array("pres", &HistorySample::presence_pct);
+  out += ",\"pos\":[";
+  for (uint16_t i = 0; i < n && ok; i++) {
+    if (i > 0)
+      out += ',';
+    out += '[';
+    const uint8_t cnt = std::min<uint8_t>(snap[i].n_pos, MAX_TARGETS);
+    for (uint8_t j = 0; j < cnt; j++) {
+      snprintf(num, sizeof(num), "%s%d,%d", j > 0 ? "," : "", static_cast<int>(snap[i].pos_x[j]),
+               static_cast<int>(snap[i].pos_y[j]));
+      out += num;
+    }
+    out += ']';
+    flush(false);
+  }
+  out += "]}";
+  flush(true);
+  if (ok)
+    httpd_resp_send_chunk(req, nullptr, 0);
+  return ESP_OK;
 }
 
 }  // namespace esphome::hlk_ld6001a

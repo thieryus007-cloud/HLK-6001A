@@ -23,9 +23,9 @@ contient l'**ancien firmware HLK-LD6001B** : ne pas l'utiliser pour le
 
 ## Image
 
-**`plus_2884858abe00_hlk-ld6001a_full_flash_16MB_2026-09-27.bin`** —
-16 777 216 octets (`0x000000`–`0x1000000`), SHA-256
-`654ffe43a285db1de62de0efe9f7c885286ea01c233eeed73e34374f294ca9fb`.
+**`plus_2884858abe00_hlk-ld6001a_full_flash_16MB_2026-09-27_historique.bin`**
+— 16 777 216 octets (`0x000000`–`0x1000000`), SHA-256
+`d2e4d7d089db23c483d96b78944c3b88ae145d7fb486e814104a0e03475ef1db`.
 Lue par USB à travers un hub et un prolongateur (COM59), identité
 vérifiée par `flash-id` juste avant.
 
@@ -33,19 +33,17 @@ Contenu vérifié contre le build qui tourne sur la carte :
 
 | Zone | Contenu |
 |---|---|
-| `otadata` (0x9000) | deux entrées valides, `seq=5` la plus récente → application active = `app0` |
-| `app0` (0x10000) | **identique octet pour octet** au `firmware.ota.bin` du build `hlk-ld6001a-xiao` du 2026-09-26 20:55:59 (`config_hash 0xe10cef7a`, ESPHome 2026.8.0) — la date de compilation annoncée par la carte via l'API : anti-rebond de `People Count`, protections brownout (`AT+STOP` au démarrage, WiFi activé après 8 s, `output_power: 8.5db`), sans `uart debug` |
-| `app1` (0x7D0000) | build antérieur, inactif |
+| `otadata` (0x9000) | une entrée valide, `seq=1` → application active = `app0` (écriture USB) |
+| `app0` (0x10000) | **identique octet pour octet** au `firmware.ota.bin` du build `hlk-ld6001a-xiao` du 2026-09-27 14:21:30 (`config_hash 0xe10cef7a`, ESPHome 2026.8.0) : anti-rebond de `People Count`, protections brownout (`AT+STOP` au démarrage, WiFi activé après 8 s, `output_power: 8.5db`), sans `uart debug`, panneau Historique de la page Plots (`/history.json`) |
 | `nvs` (0xF90000) | préférences en service : réglages radar `sensFar 3`, `sensNear 5`, rayon 400 cm, hauteur 250 cm, hauteur de balayage 200 cm, heartbeat 60 s, zone désactivée ; `room_config` 4,00 × 4,00 × 2,50 m, montage plafond |
 
 Les réglages radar et la configuration de la pièce sont modifiables depuis
 la page web : l'image reflète leur valeur au 2026-09-27. Après tout
 changement durable, en refaire une.
 
-Image précédente, conservée pour revenir à l'état du 2026-09-25 (firmware
-sans anti-rebond ni protections brownout) :
-`plus_2884858abe00_hlk-ld6001a_full_flash_16MB_2026-09-26.bin` (SHA-256
-`be416b6c…de43fda`).
+Images précédentes, conservées : `..._2026-09-27.bin` (même carte, sans
+panneau Historique, SHA-256 `654ffe43…4ca9fb`) ; `..._2026-09-26.bin`
+(état du 2026-09-25, sans anti-rebond ni protections brownout).
 
 ## Restaurer
 
@@ -54,7 +52,7 @@ attendues ci-dessus) :
 
 ```powershell
 python -m esptool --port <COM> flash-id
-python -m esptool --port <COM> write-flash 0x0 plus_2884858abe00_hlk-ld6001a_full_flash_16MB_2026-09-27.bin
+python -m esptool --port <COM> write-flash 0x0 plus_2884858abe00_hlk-ld6001a_full_flash_16MB_2026-09-27_historique.bin
 ```
 
 Écrit aussi la NVS : la carte redémarre avec ses réglages et sa

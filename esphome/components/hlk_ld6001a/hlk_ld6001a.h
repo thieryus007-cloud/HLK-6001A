@@ -75,6 +75,7 @@
 #include <esp_system.h>
 #include <deque>
 #include <functional>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -122,6 +123,24 @@ static const uint32_t PUBLISH_THROTTLE_MS = 1000;
 // counts matched the 6001B's published count on 180/180 samples (104/180
 // without it).
 static const uint32_t TARGET_COUNT_INCREASE_DEBOUNCE_MS = 60000;
+
+// Detection history for the Plots page (2026-09-27): one sample every
+// HISTORY_INTERVAL_MS, HISTORY_LEN samples = 3 h, RAM only (lost on reboot).
+// Served by GET /history.json, drawn as curves (counts, presence) and as a
+// heat map of target positions -- a fixed ghost shows up as a hot spot.
+static const uint32_t HISTORY_INTERVAL_MS = 10000;
+static const uint16_t HISTORY_LEN = 1080;
+static const uint8_t HISTORY_NO_DATA = 255;
+
+struct HistorySample {
+  uint8_t raw_max;       // max filtered target count over the interval (HISTORY_NO_DATA: no frame)
+  uint8_t raw_min;       // min over the interval (HISTORY_NO_DATA: no frame)
+  uint8_t published;     // People Count value published at the end of the interval
+  uint8_t presence_pct;  // % of frames with presence (HISTORY_NO_DATA: no frame)
+  uint8_t n_pos;         // positions stored below, <= MAX_TARGETS
+  int8_t pos_x[MAX_TARGETS];  // decimetres, clamped to +/-12.7 m
+  int8_t pos_y[MAX_TARGETS];
+};
 
 // AT+READ capture window -- the real reply is ~420 characters; generous
 // headroom, bounded.
@@ -260,6 +279,12 @@ class HlkLd6001aComponent final : public Component, public uart::UARTDevice {
   // send_reinit_sequence_() straight from the httpd task, which writes to
   // the UART and touches the command queue off the main task.
   static esp_err_t http_handle_radar_restart_post_(httpd_req_t *req);
+  // GET /history.json -- detection history (see HISTORY_INTERVAL_MS).
+  static esp_err_t http_handle_history_json_(httpd_req_t *req);
+  // Per-frame accumulation (main task, from process_tlv_frame_()).
+  void history_accumulate_(uint8_t real_people);
+  // Closes the current interval once due (main task, from loop()).
+  void history_tick_(uint32_t now);
   volatile bool pending_radar_restart_ = false;
 
   // AT+ command queue: one command in flight, advanced on a real AT+OK /
@@ -304,6 +329,24 @@ class HlkLd6001aComponent final : public Component, public uart::UARTDevice {
   uint8_t published_target_count_ = 0;
   uint8_t pending_target_count_ = 0;
   uint32_t pending_target_count_since_ = 0;
+
+  // Detection history ring buffer (see HistorySample). Written by the main
+  // task once per interval, read by the httpd task: every access to
+  // history_/history_head_/history_count_/history_seq_/
+  // history_last_write_millis_ holds history_mutex_. The accumulators below
+  // are main-task only.
+  HistorySample history_[HISTORY_LEN] = {};
+  uint16_t history_head_ = 0;   // next write index
+  uint16_t history_count_ = 0;  // valid samples, <= HISTORY_LEN
+  uint32_t history_seq_ = 0;    // samples written since boot
+  uint32_t history_last_write_millis_ = 0;
+  std::mutex history_mutex_;
+  bool history_started_ = false;
+  uint32_t history_interval_start_ = 0;
+  uint8_t history_acc_max_ = 0;
+  uint8_t history_acc_min_ = 0;
+  uint16_t history_acc_frames_ = 0;
+  uint16_t history_acc_present_ = 0;
 
   // TLV framing state (sticky, re-learned whenever a full decision is
   // possible -- see decide_tlv_framing_()) and counters for /hlk_targets.json.

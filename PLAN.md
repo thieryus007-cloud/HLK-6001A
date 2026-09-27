@@ -766,6 +766,38 @@ et, côté 6001B, 7ᵉ sauvegarde (`README-plus.md`). Redémarrage après
 lecture : 6001A propre (« USB peripheral »), **6001B brownout** (2ᵉ sur
 ses 2 derniers démarrages, protections #1/#2 seulement).
 
+## Journal 2026-09-27 — historique de détection (page Plots)
+
+Demande utilisateur : commencer la fiabilité de la détection par le 6001A,
+avec un graphe d'historique des 1–3 dernières heures à la place de « Vue
+de profil ». Réalisé : panneau **Historique** à deux onglets alimenté par
+un tampon circulaire tenu par l'ESP32 (`HistorySample`, 1 080 × 17 octets
+= 3 h à 10 s, verrou `std::mutex` entre la tâche principale qui écrit et
+la tâche httpd qui lit), route `GET /history.json` envoyée par morceaux
+depuis une copie sur le tas (pile httpd de 4 Ko), `max_uri_handlers`
+porté à 14.
+
+- *Courbes* : brut max/min, People Count publié, bande de présence (et
+  « aucune trame radar » en gris foncé) — rend visibles les épisodes de
+  cibles parasites et le jeu de l'anti-rebond.
+- *Carte* : cumul des positions (une par intervalle et par cible) sur des
+  cases de 20 cm, même repère/rotation que le nuage XY de la page HLK ;
+  affiche la position moyenne du point le plus chaud — pour localiser une
+  cible fantôme fixe (pièce jamais vide depuis le repositionnement).
+
+Vue de profil retirée proprement (caméra, rendu, redimensionnement,
+zoom, appel dans la boucle d'animation). Vérifications : 4 blocs
+`<script>` passés à `node --check` ; code de l'historique exécuté sous node
+avec un faux canvas et un jeu de 1 080 échantillons (deux onglets, deux
+périodes, historique vide, absent, chargement) — un défaut trouvé et
+corrigé ainsi (position pile sur une limite de case rangée une case trop
+bas, 3,8/0,2 = 18,999… en flottant), et le point chaud affiché comme
+position moyenne réelle plutôt que centre de case. Compilation sans
+avertissement dans le composant, RAM 36,5 % (+18 Ko). Build
+2026-09-27 14:21:30 écrit par USB (COM59, identité vérifiée), démarrage
+propre, `/history.json` valide avec des données réelles, page servie en
+0,36 s.
+
 ## Risques identifiés
 
 - **Débit UART ambigu** (115200 vs 921600 selon la source) — impact

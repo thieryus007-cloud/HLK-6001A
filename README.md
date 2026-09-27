@@ -28,9 +28,15 @@ le HLK-LD6001B) :
   rémanence 5/10 trames, export JSON de la trame affichée, inspection d'un
   point au clic/tap. Le format de point est celui du HLK-LD6001B (taille
   confirmée, contenu non encore validé sur ce module).
-- **Plots** : vue 3D orbitale + vues Dessus/Face/Profil (zoom, recentrage,
-  rotation de la vue de dessus), 6 emplacements de cibles fixes (ID,
-  position, vitesse), état du système.
+- **Plots** : vue 3D orbitale + vues Dessus/Face (zoom, recentrage,
+  rotation de la vue de dessus), panneau **Historique** (1 h / 3 h,
+  tenu par l'ESP32) avec deux onglets — *Courbes* : nombre de cibles brut
+  max/min par intervalle de 10 s, People Count publié, bande de présence ;
+  *Carte* : carte de chaleur des positions des cibles (même repère et
+  rotation que le nuage XY de la page HLK), avec la position du point le
+  plus chaud — une cible fantôme fixe y ressort à l'endroit où personne
+  ne se tient. 6 emplacements de cibles fixes (ID, position, vitesse),
+  état du système.
 - **Configure** : à gauche Setup Details (protocole et cadrage détecté,
   firmware radar — réponse `AT+READ` complète au survol —, fonctionnement,
   mémoire, WiFi, récupérations watchdog, cadence) et Advanced Commands

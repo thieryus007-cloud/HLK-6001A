@@ -209,12 +209,26 @@ voir MAINTENANCE.md.
 | `/at_command` | POST (`cmd=...`) | Advanced Commands, non bloquant, `409` si une commande est déjà en cours |
 | `/at_command_result` | GET | résultat de la dernière commande (`done`, `ok`, `timedOut`, `raw`) |
 | `/radar_restart` | POST | cycle complet (`AT+RESET` + séquence de configuration) |
+| `/history.json` | GET | historique de détection (panneau Historique de la page Plots) |
 
 `/hlk_targets.json` : `count`, `targets[{id,x,y,z,vx,vy,vz}]`,
 `points[{x,y,z,d}]` (150 max), `pointLen`, `frameCount`, `rejectedFrames`,
 `framing` (`no_check`/`with_check`/`unknown`), `debugMode`, `uptimeS`,
-`freeHeap`, `rssi`, `recoveryCount`, `ssid`. Aucune autre route n'est
-sondée en boucle (risque d'épuisement du pool de sockets LWIP).
+`freeHeap`, `rssi`, `recoveryCount`, `ssid`. Seule route sondée en boucle
+(1 fois par seconde, risque d'épuisement du pool de sockets LWIP au-delà).
+
+`/history.json` : un échantillon toutes les 10 s, 1 080 conservés (3 h),
+en mémoire vive seulement (perdus au redémarrage), du plus ancien au plus
+récent — `intervalS`, `n`, `seq` (échantillons écrits depuis le
+démarrage), `ageS` (secondes depuis la fin du plus récent), `rawMax` /
+`rawMin` (nombre de cibles filtré, max/min sur l'intervalle), `pub`
+(People Count publié en fin d'intervalle), `pres` (% des trames avec
+présence), `pos` (positions des cibles en fin d'intervalle, `[x,y,...]` en
+décimètres). `-1` = aucune trame radar pendant l'intervalle ; un arrêt de
+la boucle principale (transfert OTA) est comblé par des `-1` pour garder
+l'axe du temps juste. Réponse envoyée par morceaux (~60 Ko pleine), lue
+par la page Plots à son affichage puis toutes les 30 s tant qu'elle est
+visible.
 
 `/radar_settings` : `sensFar`, `sensNear`, `rangeCm`, `heightCm`,
 `hrangeCm`, `heartbeatS`, `zone{enabled,xNeg,xPos,yNeg,yPos}`,
