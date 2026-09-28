@@ -67,10 +67,25 @@ API.
 
 ## Déploiement d'unités supplémentaires
 
+Cartes en service :
+
+| Carte | MAC | Fichier | Nom réseau |
+|---|---|---|---|
+| 6001A-01 | `28:84:85:8a:be:00` | `hlk-ld6001a-xiao.yaml` | `hlk-ld6001a-xiao` |
+| 6001A-02 | `7c:4f:ad:1e:98:fc` | `hlk-ld6001a-xiao-02.yaml` | `hlk-ld6001a-xiao-02` |
+
 1. Partagés : `esphome/secrets.yaml`, `esphome/components/hlk_ld6001a/`.
-2. Par unité : copier `hlk-ld6001a-xiao.yaml` sous un nouveau nom et
-   changer `substitutions: name`/`friendly_name`, car deux unités de même
-   nom se confondraient sur le réseau et dans Home Assistant.
+2. Par unité : un fichier `hlk-ld6001a-xiao-NN.yaml` qui **inclut**
+   `hlk-ld6001a-xiao.yaml` sans le modifier (`packages: base: !include`)
+   et ne redéfinit que `substitutions: name`/`friendly_name` et
+   `wifi: ap: ssid` — modèle : `hlk-ld6001a-xiao-02.yaml`. Deux unités de
+   même nom se confondraient sur le réseau et dans Home Assistant. Vérifier
+   que les configurations résolues ne diffèrent que par ces noms
+   (`python -m esphome config <fichier>` pour chacune, puis comparaison).
+   Premier flash : `flash-id` (MAC), sauvegarde de l'ancien contenu si la
+   carte en a un, `erase-flash`, `esphome upload --device <COM>`.
+   Si le radar reste muet après plusieurs redémarrages de l'ESP32 (toutes
+   les commandes sans réponse) : coupure d'alimentation > 1 min.
 3. Vérification post-déploiement complète pour chaque unité, sans
    raccourci. Le jeu de commandes a été établi sur le firmware radar
    `NOP_2.11-20260525-minesemi` : vérifier la version rapportée par

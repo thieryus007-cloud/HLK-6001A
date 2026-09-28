@@ -1,0 +1,20 @@
+# Carte HLK-LD6001A 02 (2026-09-28) : XIAO ESP32-S3 Plus 7c:4f:ad:1e:98:fc
+# + radar HLK-LD6001A, identique a la carte hlk-ld6001a-xiao (tests de
+# couverture dans une autre piece).
+#
+# Configuration reprise telle quelle de hlk-ld6001a-xiao.yaml (package
+# ci-dessous, fichier non modifie) : meme firmware, memes reglages. Seuls
+# changent le nom reseau, le nom affiche et le point d'acces de secours --
+# deux cartes de meme nom se confondraient sur le reseau (mDNS) et dans
+# Home Assistant (DEPLOYMENT.md, "Deploiement d'unites supplementaires").
+# Les valeurs de ce fichier priment sur celles du package.
+substitutions:
+  name: "hlk-ld6001a-xiao-02"
+  friendly_name: "HLK-LD6001A plafond 02 (XIAO ESP32-S3 Plus)"
+
+packages:
+  base: !include hlk-ld6001a-xiao.yaml
+
+wifi:
+  ap:
+    ssid: "hlk-ld6001a-xiao-02-fallback"

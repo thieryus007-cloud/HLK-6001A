@@ -6,8 +6,12 @@ Architecture, interface web et API HTTP reprises de l'état final du projet
 HLK-LD6001B (même carte) ; protocole et jeu de commandes propres à ce
 module (firmware radar `NOP_2.11-20260525-minesemi`) — voir PROTOCOL.md.
 
-**État** : firmware en service sur l'unité `28:84:85:8a:be:00`
-(http://192.168.1.90/, nom réseau `hlk-ld6001a-xiao`). Liaison radar,
+**État** : firmware en service sur deux cartes — **6001A-01**
+`28:84:85:8a:be:00` (http://192.168.1.90/, `hlk-ld6001a-xiao`) et
+**6001A-02** `7c:4f:ad:1e:98:fc` (http://192.168.1.201/,
+`hlk-ld6001a-xiao-02`, même firmware, tests de couverture). Brownouts de
+la carte 01 en cours d'investigation : `TRANSITION-BROWNOUT-6001A.md`.
+Règles du projet : `CLAUDE.md`. Liaison radar,
 séquence de configuration (12 commandes acquittées, réglages relus
 conformes par `AT+READ`), décodage des trames et page web vérifiés sur le
 matériel ; interface et intégration Home Assistant validées par

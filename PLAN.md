@@ -798,6 +798,56 @@ avertissement dans le composant, RAM 36,5 % (+18 Ko). Build
 propre, `/history.json` valide avec des données réelles, page servie en
 0,36 s.
 
+## Journal 2026-09-28 — carte 6001A-02, brownouts de la carte 01
+
+**Carte 6001A-02** (demande utilisateur : même firmware que la carte
+existante, nommage 02, pour des tests de couverture dans une autre pièce).
+XIAO ESP32-S3 Plus `7c:4f:ad:1e:98:fc` (ESP32-S3 rév. 0.2, PSRAM 8 Mo,
+flash 16 Mo Puya), radar HLK-LD6001A (firmware radar
+`NOP_2.11-20260525-minesemi`, identique à la carte 01), **alimentée par un
+port USB du PC**.
+
+- Carte déjà connue : seconde unité Plus du projet HLK-LD6001B, en réserve.
+  Contenu sauvegardé en lecture seule avant effacement (ancien firmware
+  `hlk-ld6001b-xiao-plus` du 2026-09-14) — image archivée côté
+  HLK-LD6001B (`ESP32S3_Plus/Clone_ESP32S3/README-plus.md`), pas ici.
+- Fichier `esphome/hlk-ld6001a-xiao-02.yaml` : inclut
+  `hlk-ld6001a-xiao.yaml` (non modifié) et ne change que `name`
+  (`hlk-ld6001a-xiao-02`), `friendly_name` (« HLK-LD6001A plafond 02
+  (XIAO ESP32-S3 Plus) ») et `wifi: ap: ssid`
+  (`hlk-ld6001a-xiao-02-fallback`). Configurations résolues comparées
+  (`esphome config`, 604 lignes chacune) : seuls ces noms et ce qui en
+  découle (`build_path`, `use_address`) diffèrent.
+- Écriture : `flash-id` (MAC vérifiée), `erase-flash`, `esphome upload`
+  par USB (COM57). Un premier nommage « -2 » a été remplacé le jour même
+  par « -02 » à la demande de l'utilisateur (même carte, réécriture USB).
+  Build en service : 2026-09-28 11:19:47. Annoncée en mDNS, IP
+  192.168.1.201.
+- Après deux redémarrages de l'ESP32 sans coupure du radar : **radar muet**
+  (toutes les commandes sans réponse, 0 trame, deux récupérations watchdog
+  sans effet). Coupure USB > 1 min par l'utilisateur → radar reparti :
+  trames reçues, réglages relus conformes (valeurs d'usine
+  `DPKTHF 4 / DPKTHN 5`, rayon 450 ; hauteur 250 et rotation réglées ensuite
+  par l'utilisateur depuis la page).
+- Image de référence non faite : une lecture esptool redémarre la carte ;
+  à faire une fois la carte installée dans sa pièce.
+
+**Brownouts de la carte 01** (aucune action sur elle ce jour-là, hors
+lectures d'état) : ~03:01 (fonctionnement normal, rien en cours),
+**11:29:31** (37 s après le rebranchement de la carte 02 sur un port du
+PC) et **11:31:46** (~10–20 s après des lectures d'état HTTP puis API de
+la carte). Tous en fonctionnement, avec les trois protections en place.
+Correction : j'avais d'abord attribué le brownout de 11:29 à la carte 02
+« sur le même hub » — faux, l'utilisateur avait indiqué que la 02 était
+sur un autre port du PC ; la carte 01 et le 6001B sont sur un hub USB
+auto-alimenté, la 02 seule sur un port du PC. Cause non établie. Le
+6001B (même hub) ne répondait plus sur le réseau à 15:49 (présent en USB).
+
+**Consigne utilisateur** : ne plus toucher à la carte 01 sans son accord
+explicite (`CLAUDE.md`). Enquête à mener dans une nouvelle conversation :
+`TRANSITION-BROWNOUT-6001A.md`. Outils de mesure copiés dans
+`testing/outils/`.
+
 ## Risques identifiés
 
 - **Débit UART ambigu** (115200 vs 921600 selon la source) — impact
